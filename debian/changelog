@@ -1,0 +1,5 @@
+ipv6toolkit (1.4-1) unstable; urgency=low
+
+  * Initial release (Closes: #681917)
+
+ -- Octavio Alvarez <alvarezp@alvarezp.com>  Sat, 24 Aug 2013 18:37:54 -0700

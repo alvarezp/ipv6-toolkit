@@ -1,0 +1,22 @@
+From: Octavio Alvarez <alvarezp@alvarezp.com>
+Subject: Fix remaining instances of dashed name.
+
+The package name was agreed to be ipv6toolkit instead of ipv6-toolkit.
+Fernando released an 1.4 version with pretty much everything fixed but
+looks like we missed this one.
+
+Forwarded: no
+Author: Octavio Alvarez <alvarezp@alvarezp.com>
+Last-Update: 2013-08-26
+
+--- a/tools/scan6.c
++++ b/tools/scan6.c
+@@ -6027,7 +6027,7 @@
+ 	fclose(fp);
+ 
+ 	if(!fname_f)
+-		strncpy(fname, "/usr/share/ipv6-toolkit/oui.txt", MAX_FILENAME_SIZE-1);
++		strncpy(fname, "/usr/share/ipv6toolkit/oui.txt", MAX_FILENAME_SIZE-1);
+ 
+ 	return(1);
+ }
