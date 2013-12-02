@@ -1,9 +1,11 @@
-#define SI6_TOOLKIT "SI6 Networks' IPv6 Toolkit v1.4"
+#define SI6_TOOLKIT "SI6 Networks' IPv6 Toolkit v1.5.1"
+#define	MAX_CMDLINE_OPT_LEN	40
+#define DATE_STR_LEN		40
 
-/* Constants to signal special interface types */
-#define	IFACE_LOOPBACK			1
-#define IFACE_TUNNEL			2
-
+/* 
+   XXX Most of these constants should be moved to libipv6.h when the library
+   is employed by all tools.
+ */
 
 /* Constants used with the libpcap functions */
 #define PCAP_SNAP_LEN			65535
@@ -19,3 +21,6 @@
 	#define	PCAP_TIMEOUT			0
 #endif
 
+/* Constants to signal special interface types */
+#define	IFACE_LOOPBACK			1
+#define IFACE_TUNNEL			2

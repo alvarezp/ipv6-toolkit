@@ -7,7 +7,9 @@ The following people sent patches that were incorporated into this release
 of the toolkit:
 
     Octavio Alvarez <alvarezp@alvarezp.com>
+    Alexander Bluhm <bluhm@openbsd.org>
     Alistair Crooks <agc@pkgsrc.org>
+    Declan A Rieb   <darieb@sandia.gov>
 
 
 ** Package maintainers **
@@ -31,7 +33,26 @@ These are the maintainers for each of the different packages:
 
     Robin H. Johnson <robbat2@gentoo.org>
 
-  + NetBSD (pkgsr framework)
+  + NetBSD (pkgsrc framework)
 
     Alistair Crooks <agc@pkgsrc.org>
+
+  + OpenBSD
+
+    Alexander Bluhm <bluhm@openbsd.org>
+
+
+** Troubleshooting/Debugging **
+
+Spotting bugs in networking tool can be tricky, since at times they only show
+up in specific network scenarios.
+
+The following indviduals provided great help in identifying bugs in the the
+toolkit (thus leading to fixes and improvements):
+
+    Stephane Bortzmeyer <stephane@bortzmeyer.org>
+    Marc Heuse <mh@mh-sec.de>
+    Erik Muller <erikm@buh.org>
+    Declan A Rieb <darieb@sandia.gov>
+    Tim <tim-security@sentinelchicken.org>
 
