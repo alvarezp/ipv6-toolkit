@@ -1,3 +1,12 @@
+ipv6toolkit (1.5.1-1) unstable; urgency=low
+
+  * New upstream version.
+  * Upstream fixed manpages to fix license-problem-gfdl-invariants.
+  * Removed all patches. All were committed upstream.
+  * Overrode a manpage error in scan6.1 because of a long URL.
+
+ -- Octavio Alvarez <alvarezp@alvarezp.com>  Sun, 01 Dec 2013 22:55:58 -0800
+
 ipv6toolkit (1.4-1) unstable; urgency=low
 
   * Initial release (Closes: #681917)
