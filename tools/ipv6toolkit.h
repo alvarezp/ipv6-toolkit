@@ -1,4 +1,4 @@
-#define SI6_TOOLKIT "SI6 Networks' IPv6 Toolkit v1.5.1"
+#define SI6_TOOLKIT "SI6 Networks' IPv6 Toolkit v1.5.2"
 #define	MAX_CMDLINE_OPT_LEN	40
 #define DATE_STR_LEN		40
 
@@ -15,7 +15,7 @@
 	#define PCAP_NETMASK_UNKNOWN	0xffffffff
 #endif
 
-#if defined (__FreeBSD__) || defined(__NetBSD__) || defined (__OpenBSD__) || defined(__APPLE__)
+#if defined (__FreeBSD__) || defined(__NetBSD__) || defined (__OpenBSD__) || defined(__APPLE__) || defined(__FreeBSD_kernel__)
 	#define	PCAP_TIMEOUT			1
 #else
 	#define	PCAP_TIMEOUT			0
