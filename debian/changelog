@@ -1,3 +1,14 @@
+ipv6toolkit (1.5.2-1) unstable; urgency=low
+
+  * Added debian/gbp.conf
+  * Merged new upstream release: 1.5.2
+    * Fixes GNU/kFreeBSD compilation
+  * Updated Standards-Version to 3.9.5; no changes required
+  * Added Vcs-* control headers
+  * Upstream renamed address6 to addr6; update here
+
+ -- Octavio Alvarez <alvarezp@alvarezp.com>  Sun, 09 Feb 2014 10:11:30 -0800
+
 ipv6toolkit (1.5.1-1) unstable; urgency=low
 
   * New upstream version.
