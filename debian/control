@@ -17,7 +17,7 @@ Description: Security assessment and troubleshooting tool for the IPv6 protocols
  packets.
  .
  List of tools:
-  * address6: An IPv6 address analysis and manipulation tool.
+  * addr6: An IPv6 address analysis and manipulation tool.
   * flow6: A tool to perform a security asseessment of the IPv6 Flow
     Label.
   * frag6: A tool to perform IPv6 fragmentation-based attacks and to
