@@ -5,6 +5,8 @@ Maintainer: Octavio Alvarez <alvarezp@alvarezp.com>
 Build-Depends: debhelper (>= 8.0.0), libpcap-dev
 Standards-Version: 3.9.5
 Homepage: http://www.si6networks.com/tools/ipv6toolkit/
+Vcs-Browser: https://github.com/alvarezp/ipv6toolkit/tree/debian
+Vcs-Git: https://github.com/alvarezp/ipv6toolkit.git -b debian
 
 Package: ipv6toolkit
 Architecture: any
