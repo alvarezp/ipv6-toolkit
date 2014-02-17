@@ -22,6 +22,10 @@ all:
 %:
 	dh $@ 
 
+override_dh_auto_build:
+	mkdir -p data
+	dh_auto_build
+
 # The --exclude=LICENSE.TXT is needed to stop lintian from throwing
 # a warning about duplicate license files.
 override_dh_installdocs:
