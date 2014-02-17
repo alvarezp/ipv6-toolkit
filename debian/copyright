@@ -1,6 +1,7 @@
 Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: IPv6 Toolkit
 Source: http://www.si6networks.com/tools/ipv6toolkit/
+Files-Excluded: data/oui.txt
 
 Files: *
 Copyright: 2011-2013 Fernando Gont <fgont@si6networks.com>

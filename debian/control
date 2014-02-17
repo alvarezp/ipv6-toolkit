@@ -10,7 +10,7 @@ Vcs-Git: https://github.com/alvarezp/ipv6toolkit.git -b debian
 
 Package: ipv6toolkit
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends}, ieee-data
 Description: Security assessment and troubleshooting tool for the IPv6 protocols
  The SI6 Networks' IPv6 toolkit is a set of IPv6 security and
  trouble-shooting tools, that can send arbitrary IPv6-based
