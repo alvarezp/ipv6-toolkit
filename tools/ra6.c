@@ -2,7 +2,7 @@
  * ra6: A security assessment tool for attack vectors based on 
  *      ICMPv6 Router Advertisement messages
  *
- * Copyright (C) 2009-2013 Fernando Gont
+ * Copyright (C) 2009-2014 Fernando Gont
  *
  * Programmed by Fernando Gont for SI6 Networks <http://www.si6networks.com>
  *
@@ -40,6 +40,7 @@
 #include <netinet/icmp6.h>
 #include <pcap.h>
 
+#include <limits.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,10 +86,10 @@ struct nd_opt_route_info_l	*routeopt;
 char						*lasts, *rpref, *endptr;
     
 size_t						nw;
-u_int16_t					lifetime;
-u_int32_t					reachable;
-u_int32_t					retrans;
-u_int8_t					curhop, hoplimit;
+uint16_t					lifetime;
+uint32_t					reachable;
+uint32_t					retrans;
+uint8_t					curhop, hoplimit;
 char						preference=0, prefbits=0;
 unsigned int				nprefixes=0, nroutes=0, nfrags=0;
 unsigned int				hdrlen, ndstopthdr=0, nhbhopthdr=0, ndstoptuhdr=0;
@@ -105,25 +106,25 @@ unsigned long				ul_res, ul_val;
 unsigned int				i, j, startrand, sources, nsources, prefixes, routes, mtus;
 unsigned int				nfloodp, nfloodr, endrand;
 unsigned int				nfloodda, nflooddoa, nsleep;
-u_int16_t					mask;
-u_int8_t					prefixlen[MAX_PREFIX_OPTION];
-u_int32_t					prefixvalid[MAX_PREFIX_OPTION];
-u_int32_t					prefixpref[MAX_PREFIX_OPTION];
+uint32_t					mask;
+uint8_t					prefixlen[MAX_PREFIX_OPTION];
+uint32_t					prefixvalid[MAX_PREFIX_OPTION];
+uint32_t					prefixpref[MAX_PREFIX_OPTION];
 struct in6_addr				prefix[MAX_PREFIX_OPTION];
-u_int8_t					prefixflags[MAX_PREFIX_OPTION];
+uint8_t					prefixflags[MAX_PREFIX_OPTION];
 
 struct in6_addr				route[MAX_ROUTE_OPTION];
-u_int8_t					routelen[MAX_ROUTE_OPTION];
-u_int32_t					routelife[MAX_ROUTE_OPTION];
-u_int8_t					routepref[MAX_ROUTE_OPTION];
+uint8_t					routelen[MAX_ROUTE_OPTION];
+uint32_t					routelife[MAX_ROUTE_OPTION];
+uint8_t					routepref[MAX_ROUTE_OPTION];
     
 struct in6_addr				rdnss[MAX_RDNSS_OPTION][MAX_RDNSS_OPT_ADDRS];
-u_int32_t					rdnsslife[MAX_RDNSS_OPTION];
+uint32_t					rdnsslife[MAX_RDNSS_OPTION];
 unsigned int				nrdnss=0, dnsopts;
 unsigned int				nrdnssopt[MAX_RDNSS_OPTION];
 int 						smaxaddrs;
 
-u_int16_t					mtu[MAX_MTU_OPTION];
+uint16_t					mtu[MAX_MTU_OPTION];
 unsigned int				nmtu=0;
 
 struct ether_addr			linkaddr[MAX_SLLA_OPTION];
@@ -153,8 +154,11 @@ struct filters		filters;
 
 int main(int argc, char **argv){
 	extern char		*optarg;	
-	int				r, sel, fd;
+	int				r, sel;
 	fd_set			sset, rset;
+#if defined(sun) || defined(__sun)
+	struct timeval		timeout;
+#endif
 
 	static struct option longopts[] = {
 		{"interface", required_argument, 0, 'i'},
@@ -198,7 +202,8 @@ int main(int argc, char **argv){
 		{"sleep", required_argument, 0, 'z'},
 		{"listen", no_argument, 0, 'L'},
 		{"verbose", no_argument, 0, 'v'},
-		{"help", no_argument, 0, 'h'}
+		{"help", no_argument, 0, 'h'},
+		{0, 0, 0,  0 }
 	};
 
 	char shortopts[]= "i:s:d:A:u:U:H:y:c:t:r:x:moaqp:E:eP:R:M:N:S:D:f:F:w:W:lz:Lj:k:J:K:b:g:B:G:vh";
@@ -390,7 +395,7 @@ int main(int argc, char **argv){
 
 				hdrlen= atoi(optarg);
 		
-				if(hdrlen <= 8){
+				if(hdrlen < 8){
 					puts("Bad length in Hop-by-Hop Options Header");
 					exit(EXIT_FAILURE);
 				}
@@ -1045,13 +1050,13 @@ int main(int argc, char **argv){
 		   The KAME implementation discards addresses in which the second high-order 16 bits
 		   (srcaddr.s6_addr16[1] in our case) are not zero.
 		 */  
-		idata.srcaddr.s6_addr16[0]= htons(0xfe80); /* Link-local unicast prefix */
-	
-		for(i=1;i<4;i++)
-			idata.srcaddr.s6_addr16[i]=0x0000;	
-	    
-		for(i=4; i<8; i++)
-			idata.srcaddr.s6_addr16[i]=random();
+
+		if ( inet_pton(AF_INET6, "fe80::", &(idata.srcaddr)) <= 0){
+			puts("inet_pton(): Error when converting address");
+			exit(EXIT_FAILURE);
+		}
+
+		randomize_ipv6_addr(&(idata.srcaddr), &(idata.srcaddr), 64);
 	}
 
 	/*
@@ -1059,11 +1064,12 @@ int main(int argc, char **argv){
 	    select the random Source Addresses from the link-local unicast prefix (fe80::/64).
 	 */
 	if(floods_f && !idata.srcprefix_f){
-		idata.srcaddr.s6_addr16[0]= htons(0xfe80); /* Link-local unicast prefix */
+		if ( inet_pton(AF_INET6, "fe80::", &(idata.srcaddr)) <= 0){
+			puts("inet_pton(): Error when converting address");
+			exit(EXIT_FAILURE);
+		}
 
-		for(i=1;i<8;i++)
-			idata.srcaddr.s6_addr16[i]=0x0000;
-	
+		randomize_ipv6_addr(&(idata.srcaddr), &(idata.srcaddr), 64);
 		idata.srcpreflen=64;
 	}
 
@@ -1169,18 +1175,18 @@ int main(int argc, char **argv){
 		if(idata.verbose_f)
 			puts("Listening to incoming ICMPv6 Router Solicitation messages...");
 
-		if( (fd= pcap_fileno(idata.pfd)) == -1){
-			puts("Error obtaining descriptor number for pcap_t");
-			exit(EXIT_FAILURE);
-		}
-
 		FD_ZERO(&sset);
-		FD_SET(fd, &sset);
+		FD_SET(idata.fd, &sset);
 
 		while(listen_f){
 			rset= sset;
-
-			if((sel=select(fd+1, &rset, NULL, NULL, NULL)) == -1){
+#if defined(sun) || defined(__sun)
+			timeout.tv_usec=10000;
+			timeout.tv_sec= 0;
+			if((sel=select(idata.fd+1, &rset, NULL, NULL, &timeout)) == -1){
+#else
+			if((sel=select(idata.fd+1, &rset, NULL, NULL, NULL)) == -1){
+#endif
 				if(errno == EINTR){
 					continue;
 				}
@@ -1190,94 +1196,98 @@ int main(int argc, char **argv){
 				}
 			}
 
-			/* Read a Router Solicitation message */
-			if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
-				printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
-				exit(EXIT_FAILURE);
-			}
-			else if(r == 0){
-				continue; /* Should never happen */
-			}
+#if defined(sun) || defined(__sun)
+			if(TRUE){
+#else
+			if(FD_ISSET(idata.fd, &rset)){
+#endif
+				/* Read a Router Solicitation message */
+				if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
+					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
+					exit(EXIT_FAILURE);
+				}
+				else if(r == 1){
+					pkt_ether = (struct ether_header *) pktdata;
+					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + ETHER_HDR_LEN);
+					pkt_rs = (struct nd_router_solicit *) ((char *) pkt_ipv6 + MIN_IPV6_HLEN);
 
-			pkt_ether = (struct ether_header *) pktdata;
-			pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + ETHER_HDR_LEN);
-			pkt_rs = (struct nd_router_solicit *) ((char *) pkt_ipv6 + MIN_IPV6_HLEN);
+					accepted_f=0;
 
-			accepted_f=0;
+					if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK)){
+						if(filters.nblocklinksrc){
+							if(match_ether(filters.blocklinksrc, filters.nblocklinksrc, &(pkt_ether->src))){
+								if(idata.verbose_f>1)
+									print_filter_result(&idata, pktdata, BLOCKED);
+		
+								continue;
+							}
+						}
 
-			if(idata.type == DLT_EN10MB && idata.flags != IFACE_LOOPBACK){
-				if(filters.nblocklinksrc){
-					if(match_ether(filters.blocklinksrc, filters.nblocklinksrc, &(pkt_ether->src))){
+						if(filters.nblocklinkdst){
+							if(match_ether(filters.blocklinkdst, filters.nblocklinkdst, &(pkt_ether->dst))){
+								if(idata.verbose_f>1)
+									print_filter_result(&idata, pktdata, BLOCKED);
+		
+								continue;
+							}
+						}
+					}
+	
+					if(filters.nblocksrc){
+						if(match_ipv6(filters.blocksrc, filters.blocksrclen, filters.nblocksrc, &(pkt_ipv6->ip6_src))){
+							if(idata.verbose_f>1)
+								print_filter_result(&idata, pktdata, BLOCKED);
+		
+							continue;
+						}
+					}
+	
+					if(filters.nblockdst){
+						if(match_ipv6(filters.blockdst, filters.blockdstlen, filters.nblockdst, &(pkt_ipv6->ip6_dst))){
+							if(idata.verbose_f>1)
+								print_filter_result(&idata, pktdata, BLOCKED);
+		
+							continue;
+						}
+					}
+
+					if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK)){	
+						if(filters.nacceptlinksrc){
+							if(match_ether(filters.acceptlinksrc, filters.nacceptlinksrc, &(pkt_ether->src)))
+								accepted_f=1;
+						}
+
+						if(filters.nacceptlinkdst && !accepted_f){
+							if(match_ether(filters.acceptlinkdst, filters.nacceptlinkdst, &(pkt_ether->dst)))
+								accepted_f= 1;
+						}
+					}
+
+					if(filters.nacceptsrc && !accepted_f){
+						if(match_ipv6(filters.acceptsrc, filters.acceptsrclen, filters.nacceptsrc, &(pkt_ipv6->ip6_src)))
+							accepted_f= 1;
+					}
+
+					if(filters.nacceptdst && !accepted_f){
+						if(match_ipv6(filters.acceptdst, filters.acceptdstlen, filters.nacceptdst, &(pkt_ipv6->ip6_dst)))
+							accepted_f=1;
+					}
+	
+					if(filters.acceptfilters_f && !accepted_f){
 						if(idata.verbose_f>1)
 							print_filter_result(&idata, pktdata, BLOCKED);
-		
-						continue;
+
+							continue;
 					}
-				}
 
-				if(filters.nblocklinkdst){
-					if(match_ether(filters.blocklinkdst, filters.nblocklinkdst, &(pkt_ether->dst))){
-						if(idata.verbose_f>1)
-							print_filter_result(&idata, pktdata, BLOCKED);
-		
-						continue;
-					}
-				}
-			}
-	
-			if(filters.nblocksrc){
-				if(match_ipv6(filters.blocksrc, filters.blocksrclen, filters.nblocksrc, &(pkt_ipv6->ip6_src))){
 					if(idata.verbose_f>1)
-						print_filter_result(&idata, pktdata, BLOCKED);
-		
-					continue;
+						print_filter_result(&idata, pktdata, ACCEPTED);
+
+
+					/* Send a Router Advertisement */
+					send_packet(&idata, pktdata);
 				}
 			}
-	
-			if(filters.nblockdst){
-				if(match_ipv6(filters.blockdst, filters.blockdstlen, filters.nblockdst, &(pkt_ipv6->ip6_dst))){
-					if(idata.verbose_f>1)
-						print_filter_result(&idata, pktdata, BLOCKED);
-		
-					continue;
-				}
-			}
-
-			if(idata.type == DLT_EN10MB && idata.flags != IFACE_LOOPBACK){	
-				if(filters.nacceptlinksrc){
-					if(match_ether(filters.acceptlinksrc, filters.nacceptlinksrc, &(pkt_ether->src)))
-						accepted_f=1;
-				}
-
-				if(filters.nacceptlinkdst && !accepted_f){
-					if(match_ether(filters.acceptlinkdst, filters.nacceptlinkdst, &(pkt_ether->dst)))
-						accepted_f= 1;
-				}
-			}
-
-			if(filters.nacceptsrc && !accepted_f){
-				if(match_ipv6(filters.acceptsrc, filters.acceptsrclen, filters.nacceptsrc, &(pkt_ipv6->ip6_src)))
-					accepted_f= 1;
-			}
-
-			if(filters.nacceptdst && !accepted_f){
-				if(match_ipv6(filters.acceptdst, filters.acceptdstlen, filters.nacceptdst, &(pkt_ipv6->ip6_dst)))
-					accepted_f=1;
-			}
-	
-			if(filters.acceptfilters_f && !accepted_f){
-				if(idata.verbose_f>1)
-					print_filter_result(&idata, pktdata, BLOCKED);
-
-					continue;
-			}
-
-			if(idata.verbose_f>1)
-				print_filter_result(&idata, pktdata, ACCEPTED);
-
-
-			/* Send a Router Advertisement */
-			send_packet(&idata, pktdata);
 		}
 	}
 
@@ -1298,15 +1308,28 @@ int main(int argc, char **argv){
  * that are expected to remain constant for the specified attack.
  */
 void init_packet_data(struct iface_data *idata){
+	struct dlt_null *dlt_null;
 	ethernet= (struct ether_header *) buffer;
+	dlt_null= (struct dlt_null *) buffer;
 	v6buffer = buffer + idata->linkhsize;
 	ipv6 = (struct ip6_hdr *) v6buffer;
 
-	if(idata->flags != IFACE_TUNNEL && idata->flags != IFACE_LOOPBACK){
-		ethernet->src = idata->hsrcaddr;
-		ethernet->dst = idata->hdstaddr;
+	if(idata->type == DLT_EN10MB){
 		ethernet->ether_type = htons(ETHERTYPE_IPV6);
+
+		if(!(idata->flags & IFACE_LOOPBACK)){
+			ethernet->src = idata->hsrcaddr;
+			ethernet->dst = idata->hdstaddr;
+		}
 	}
+	else if(idata->type == DLT_NULL){
+		dlt_null->family= PF_INET6;
+	}
+#if defined (__OpenBSD__)
+	else if(idata->type == DLT_LOOP){
+		dlt_null->family= htonl(PF_INET6);
+	}
+#endif
 
 	ipv6->ip6_flow=0;
 	ipv6->ip6_vfc= 0x60;
@@ -1360,7 +1383,7 @@ void init_packet_data(struct iface_data *idata){
 		   Fragment Header and a chunk data over our link layer
 		 */
 		if( (fragpart+sizeof(fraghdr)+nfrags) > (v6buffer+idata->mtu)){
-			puts("Unfragmentable part too large for current MTU (1500 bytes)");
+			printf("Unfragmentable part too large for current MTU (%u bytes)\n", idata->mtu);
 			exit(EXIT_FAILURE);
 		}
 
@@ -1491,35 +1514,14 @@ void send_packet(struct iface_data *idata, const u_char *pktdata){
 
     do{
 	if(floods_f && (pktdata==NULL || (pktdata != NULL && multicastdst_f))){
-	    /* 
+	    /*
 	        Randomize the IPv6 Source address based on the specified prefix and prefix length
 	        (defaults to fe80::/64).
 	     */  
-	    startrand= idata->srcpreflen/16;
-
-	    for(i=0; i<startrand; i++)
-		ipv6->ip6_src.s6_addr16[i]= 0;
-
-	    for(i=startrand; i<8; i++)
-		ipv6->ip6_src.s6_addr16[i]=random();
-
-
-	    if(idata->srcpreflen%16){
-		mask=0xffff;
-	    
-		for(i=0; i<(idata->srcpreflen%16); i++)
-		    mask= mask>>1;
-
-		ipv6->ip6_src.s6_addr16[startrand]= ipv6->ip6_src.s6_addr16[startrand] & htons(mask);
-		    
-	    }
-
-	    for(i=0; i<=(idata->srcpreflen/16); i++)
-		ipv6->ip6_src.s6_addr16[i]= ipv6->ip6_src.s6_addr16[i] | idata->srcaddr.s6_addr16[i];
+		randomize_ipv6_addr(&(ipv6->ip6_src), &(idata->srcaddr), idata->srcpreflen);
 
 	    if(!idata->hsrcaddr_f){
-		for(i=0; i<6; i++)
-		    ethernet->src.a[i]= random();
+			randomize_ether_addr(&(ethernet->src));
 
 		/*
 		   If the source-link layer address must be included, but no value was 
@@ -1591,23 +1593,22 @@ void send_packet(struct iface_data *idata, const u_char *pktdata){
 		    prefixopt->nd_opt_pi_preferred_time = htonl(prefixpref[0]);
 		    prefixopt->nd_opt_pi_reserved2 = 0;
 
-		    endrand= (prefixlen[0]+15)/16;
+		    endrand= (prefixlen[0]+31)/32;
 
 		    for(i=0; i<endrand; i++)
-			prefixopt->nd_opt_pi_prefix.s6_addr16[i]=random();
+			prefixopt->nd_opt_pi_prefix.s6_addr32[i]=random();
 
-		    if(prefixlen[0]%16){
+		    if(prefixlen[0]%32){
 			mask=0;
-			for(i=0; i<(prefixlen[0]%16); i++)
-			    mask= (mask>>1) | 0x8000;
+			for(i=0; i<(prefixlen[0]%32); i++)
+			    mask= (mask>>1) | 0x80000000;
 		    
-			prefixopt->nd_opt_pi_prefix.s6_addr16[endrand-1]= \
-				prefixopt->nd_opt_pi_prefix.s6_addr16[endrand-1] & htons(mask);
+			prefixopt->nd_opt_pi_prefix.s6_addr32[endrand-1]= \
+				prefixopt->nd_opt_pi_prefix.s6_addr32[endrand-1] & htonl(mask);
 		    }
 			
-		    for(i=endrand;i<8;i++)
-			prefixopt->nd_opt_pi_prefix.s6_addr16[i]=0;
-			    
+		    for(i=endrand;i<4;i++)
+			prefixopt->nd_opt_pi_prefix.s6_addr32[i]=0;	    
 		}
 		
 		ptr += sizeof(struct nd_opt_prefix_info);
@@ -1634,22 +1635,22 @@ void send_packet(struct iface_data *idata, const u_char *pktdata){
 		    routeopt->nd_opt_ri_prefix_len= routelen[0];
 		    routeopt->nd_opt_ri_lifetime = htonl(routelife[0]);
 
-		    endrand= (routelen[0]+15)/16;
+		    endrand= (routelen[0]+31)/32;
 
 		    for(i=0; i<endrand; i++)
-			routeopt->nd_opt_ri_prefix.s6_addr16[i]=random();
+			routeopt->nd_opt_ri_prefix.s6_addr32[i]=random();
 
-		    if(routelen[0]%16){
+		    if(routelen[0]%32){
 			mask=0;
-			for(i=0; i<(routelen[0]%16); i++)
-			    mask= (mask>>1) | 0x8000;
+			for(i=0; i<(routelen[0]%32); i++)
+			    mask= (mask>>1) | 0x80000000;
 		    
-			routeopt->nd_opt_ri_prefix.s6_addr16[endrand-1]= \
-				routeopt->nd_opt_ri_prefix.s6_addr16[endrand-1] & htons(mask);
+			routeopt->nd_opt_ri_prefix.s6_addr32[endrand-1]= \
+				routeopt->nd_opt_ri_prefix.s6_addr32[endrand-1] & htonl(mask);
 		    }
 			
-		    for(i=endrand;i<8;i++)
-			routeopt->nd_opt_ri_prefix.s6_addr16[i]=0;	    
+		    for(i=endrand;i<4;i++)
+			routeopt->nd_opt_ri_prefix.s6_addr32[i]=0;
 		}
 		
 		ptr += sizeof(struct nd_opt_route_info_l);
@@ -1687,8 +1688,8 @@ void send_packet(struct iface_data *idata, const u_char *pktdata){
 			dnsopt->nd_opt_rdnss_lifetime= htonl(rdnsslife[0]);
 
 			for(i=0; i<smaxaddrs && i<nflooddoa && dnsopts<nrdnss; i++, dnsopts++)
-			    for(j=0; j<8; j++)
-				dnsopt->nd_opt_rdnss_addr[i].s6_addr16[j]=random();
+			    for(j=0; j<16; j++)
+				dnsopt->nd_opt_rdnss_addr[i].s6_addr[j]=random();
 		
 			dnsopt->nd_opt_rdnss_len= (sizeof(struct nd_opt_rdnss_l) + \
 							i * sizeof(struct in6_addr))/8;

@@ -1,8 +1,18 @@
+#ifndef lib_pcap_pcap_h
+#include <pcap.h>
+#endif
+
+#include <netdb.h>
+
+
 /* General constants */
-#define SUCCESS	1
-#define FAILURE 0
-#define TRUE 1
-#define FALSE 0
+#define SUCCESS		1
+#define FAILURE		0
+#define TRUE		1
+#define FALSE		0
+
+#define ADDR_AUTO	2
+
 
 #define LUI		long unsigned int
 #define	CHAR_CR			0x0d
@@ -26,9 +36,10 @@
 #define	MIN_IPV6_HLEN			40
 #define MIN_IPV6_MTU			1280
 #define MIN_TCP_HLEN			20
-#define MIN_UDP_HLEN			20
+#define MIN_UDP_HLEN			8
 #define MIN_ICMP6_HLEN			8
 #define MIN_HBH_LEN				8
+#define	MIN_EXT_HLEN			8
 #define	SLLA_OPT_LEN			1
 #define	TLLA_OPT_LEN			1
 #define MIN_DST_OPT_HDR_SIZE	8
@@ -37,6 +48,7 @@
 #define IFACE_LENGTH			255
 #define ALL_NODES_MULTICAST_ADDR	"FF02::1"
 #define ALL_ROUTERS_MULTICAST_ADDR	"FF02::2"
+#define LOOPBACK_ADDR				"::1"
 #define SOLICITED_NODE_MULTICAST_PREFIX "FF02:0:0:0:0:1:FF00::"
 
 
@@ -60,9 +72,9 @@ struct filters{
 	struct in6_addr		*blockdst;
 	struct in6_addr		*blocktarget;
 
-	u_int8_t		*blocksrclen;
-	u_int8_t		*blockdstlen;
-	u_int8_t		*blocktargetlen;
+	uint8_t		*blocksrclen;
+	uint8_t		*blockdstlen;
+	uint8_t		*blocktargetlen;
 
 	struct ether_addr	*blocklinksrc;
 	struct ether_addr	*blocklinkdst;
@@ -78,9 +90,9 @@ struct filters{
 	struct in6_addr		*acceptdst;
 	struct in6_addr		*accepttarget;
 
-	u_int8_t		*acceptsrclen;
-	u_int8_t		*acceptdstlen;
-	u_int8_t		*accepttargetlen;
+	uint8_t		*acceptsrclen;
+	uint8_t		*acceptdstlen;
+	uint8_t		*accepttargetlen;
 	unsigned char	acceptfilters_f;
 
 	struct ether_addr	*acceptlinksrc;
@@ -104,6 +116,20 @@ struct filters{
 
 
 /* Constants used with the libcap functions */
+#define PCAP_SNAP_LEN			65535
+#define	PCAP_PROMISC			1
+#define	PCAP_OPT				1
+#ifndef PCAP_NETMASK_UNKNOWN
+	#define PCAP_NETMASK_UNKNOWN	0xffffffff
+#endif
+
+#if defined (__FreeBSD__) || defined(__NetBSD__) || defined (__OpenBSD__) || defined(__APPLE__) || defined(__FreeBSD_kernel__) || defined(sun) || defined(__sun)
+	#define	PCAP_TIMEOUT			1
+#else
+	#define	PCAP_TIMEOUT			0
+#endif
+
+
 #define PCAP_IPV6_FILTER		"ip6"
 #define PCAP_TCPV6_FILTER		"ip6 and tcp"
 #define PCAP_UDPV6_FILTER		"ip6 and udp"
@@ -167,34 +193,14 @@ struct filters{
 #define MULTI_ORIGIN			2
 
 
-/*
- * Definitions required for OSX 10.6.8 with Xcode 3.2.6
- */
-#ifndef __BYTE_ORDER__
-	#ifdef __LITTLE_ENDIAN__
-		#define __BYTE_ORDER__	__LITTLE_ENDIAN__
-	#elif defined(__BIG_ENDIAN__)
-		#define __BYTE_ORDER__ __BIG_ENDIAN__
-	#endif
-#endif
-
-#ifndef __ORDER_LITTLE_ENDIAN__
-	#define __ORDER_LITTLE_ENDIAN__	__LITTLE_ENDIAN__
-#endif
-#ifndef __ORDER_BIG_ENDIAN__
-	#define __ORDER_BIG_ENDIAN__	__BIG_ENDIAN__
-#endif
-
-
-
 struct ether_addr{
-  u_int8_t a[ETHER_ADDR_LEN];
+  uint8_t a[ETHER_ADDR_LEN];
 } __attribute__ ((__packed__));
 
 /* For DLT_NULL encapsulation */
 struct dlt_null
 {
-  u_int32_t	family;	/* Protocol Family	*/
+  uint32_t	family;	/* Protocol Family	*/
 } __attribute__ ((__packed__));
 
 
@@ -211,31 +217,31 @@ struct ip6_option{
 } __attribute__ ((__packed__));
 
 struct	nd_opt_slla{
-    u_int8_t	type;
-    u_int8_t	length;
-    u_int8_t	address[6];
+    uint8_t	type;
+    uint8_t	length;
+    uint8_t	address[6];
 } __attribute__ ((__packed__));
 
 struct	nd_opt_tlla{
-    u_int8_t	type;
-    u_int8_t	length;
-    u_int8_t	address[6];
+    uint8_t	type;
+    uint8_t	length;
+    uint8_t	address[6];
 } __attribute__ ((__packed__));
 
 struct nd_opt_route_info_l{
-    u_int8_t	nd_opt_ri_type;
-    u_int8_t	nd_opt_ri_len;
-    u_int8_t	nd_opt_ri_prefix_len;
-    u_int8_t	nd_opt_ri_rsvd_pref_rsvd;
-    u_int32_t	nd_opt_ri_lifetime;
+    uint8_t	nd_opt_ri_type;
+    uint8_t	nd_opt_ri_len;
+    uint8_t	nd_opt_ri_prefix_len;
+    uint8_t	nd_opt_ri_rsvd_pref_rsvd;
+    uint32_t	nd_opt_ri_lifetime;
     struct in6_addr	nd_opt_ri_prefix;
 } __attribute__ ((__packed__));
     
 struct nd_opt_rdnss_l{
-    u_int8_t	nd_opt_rdnss_type;
-    u_int8_t	nd_opt_rdnss_len;
-    u_int16_t	nd_opt_rdnss_rsvd;
-    u_int32_t	nd_opt_rdnss_lifetime;
+    uint8_t	nd_opt_rdnss_type;
+    uint8_t	nd_opt_rdnss_len;
+    uint16_t	nd_opt_rdnss_rsvd;
+    uint32_t	nd_opt_rdnss_lifetime;
     struct in6_addr	nd_opt_rdnss_addr[];
 } __attribute__ ((__packed__));
 
@@ -243,86 +249,95 @@ struct nd_opt_rdnss_l{
 struct ipv6pseudohdr{
     struct in6_addr srcaddr;
     struct in6_addr dstaddr;
-    u_int32_t	len;
-    u_int8_t zero[3];
-    u_int8_t	nh;
+    uint32_t	len;
+    uint8_t zero[3];
+    uint8_t	nh;
 } __attribute__ ((__packed__));
 
 /* 10Mb/s ethernet header */
-struct ether_header
-{
+struct ether_header{
   struct ether_addr dst;	/* destination eth addr	*/
   struct ether_addr src;	/* source ether addr	*/
-  u_int16_t ether_type;		/* packet type ID field	*/
+  uint16_t ether_type;		/* packet type ID field	*/
 } __attribute__ ((__packed__));
 
 
-typedef	u_int32_t tcp_seq;
+/* Generic extension header.  */
+struct ip6_eh{
+    uint8_t  eh_nxt;		/* next header.  */
+    uint8_t  eh_len;		/* length in units of 8 octets.  */
+} __attribute__ ((__packed__));
 
 
-#if defined(__linux__) || ( !defined(__FreeBSD__) && defined(__FreeBSD_kernel__))
-/* Linux definition */
+/* Solaris does not define this one */
+#if defined(sun) || defined(__sun)
+	struct  ip6_ext {
+		uint8_t ip6e_nxt;
+		uint8_t ip6e_len;
+	} __attribute__ ((__packed__));
+#endif
+
+
+typedef	uint32_t tcp_seq;
+
+
+
+/* XXX: To be removed
+ * Definitions required for OSX 10.6.8 with Xcode 3.2.6
+ */
+/*
+#ifndef __BYTE_ORDER__
+	#ifdef __LITTLE_ENDIAN__
+		#define __BYTE_ORDER__	__LITTLE_ENDIAN__
+	#elif defined(__BIG_ENDIAN__)
+		#define __BYTE_ORDER__ __BIG_ENDIAN__
+	#endif
+#endif
+
+#ifndef __ORDER_LITTLE_ENDIAN__
+	#define __ORDER_LITTLE_ENDIAN__	__LITTLE_ENDIAN__
+#endif
+#ifndef __ORDER_BIG_ENDIAN__
+	#define __ORDER_BIG_ENDIAN__	__BIG_ENDIAN__
+#endif
+*/
+
 
 /*
- * TCP header.
- * Per RFC 793, September, 1981.
+   Different OSes employ different constants fo specifying the byte order.
+   We employ the native Linux one, and if not available, map the BSD, Mac
+   OS, or Solaris into the Linux one.
  */
-struct tcp_hdr{
-    u_int16_t th_sport;		/* source port */
-    u_int16_t th_dport;		/* destination port */
-    tcp_seq th_seq;		/* sequence number */
-    tcp_seq th_ack;		/* acknowledgement number */
-#  if __BYTE_ORDER == __LITTLE_ENDIAN
-    u_int8_t th_x2:4;		/* (unused) */
-    u_int8_t th_off:4;		/* data offset */
-#  endif
-#  if __BYTE_ORDER == __BIG_ENDIAN
-    u_int8_t th_off:4;		/* data offset */
-    u_int8_t th_x2:4;		/* (unused) */
-#  endif
-    u_int8_t th_flags;
-#  define TH_FIN	0x01
-#  define TH_SYN	0x02
-#  define TH_RST	0x04
-#  define TH_PUSH	0x08
-#  define TH_ACK	0x10
-#  define TH_URG	0x20
-    u_int16_t th_win;		/* window */
-    u_int16_t th_sum;		/* checksum */
-    u_int16_t th_urp;		/* urgent pointer */
-} __attribute__ ((__packed__));
-#elif defined(__APPLE__)
-/* Mac OS definition */
+#ifndef __BYTE_ORDER
+	#define	__LITTLE_ENDIAN	1234
+	#define	__BIG_ENDIAN	4321
 
-/*
- * TCP header.
- * Per RFC 793, September, 1981.
- */
-struct tcp_hdr{
-    u_int16_t th_sport;		/* source port */
-    u_int16_t th_dport;		/* destination port */
-    tcp_seq th_seq;		/* sequence number */
-    tcp_seq th_ack;		/* acknowledgement number */
-#  if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-    u_int8_t th_x2:4;		/* (unused) */
-    u_int8_t th_off:4;		/* data offset */
-#  endif
-#  if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-    u_int8_t th_off:4;		/* data offset */
-    u_int8_t th_x2:4;		/* (unused) */
-#  endif
-    u_int8_t th_flags;
-#  define TH_FIN	0x01
-#  define TH_SYN	0x02
-#  define TH_RST	0x04
-#  define TH_PUSH	0x08
-#  define TH_ACK	0x10
-#  define TH_URG	0x20
-    u_int16_t th_win;		/* window */
-    u_int16_t th_sum;		/* checksum */
-    u_int16_t th_urp;		/* urgent pointer */
-} __attribute__ ((__packed__));
-#else
+	/* Mac OS */
+	#if defined (__BYTE_ORDER__)
+		# if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+			#define __BYTE_ORDER __LITTLE_ENDIAN
+		#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+			#define __BYTE_ORDER __BIG_ENDIAN
+		#endif
+
+	/* BSD */
+	#elif defined(_BYTE_ORDER)
+		#if _BYTE_ORDER == _LITTLE_ENDIAN
+			#define __BYTE_ORDER __LITTLE_ENDIAN
+		#elif _BYTE_ORDER == _BIG_ENDIAN
+			#define __BYTE_ORDER __BIG_ENDIAN		
+		#endif
+	/* XXX: Solaris. There should be a better constant on which to check the byte order */
+	#elif defined(sun) || defined (__sun)
+		#if defined(_BIT_FIELDS_LTOH)
+			#define __BYTE_ORDER __LITTLE_ENDIAN
+		#else
+			#define __BYTE_ORDER __IG_ENDIAN
+		#endif
+	#endif
+#endif
+
+
 /* BSD definition */
 
 /*
@@ -330,19 +345,19 @@ struct tcp_hdr{
  * Per RFC 793, September, 1981.
  */
 struct tcp_hdr {
-	u_int16_t th_sport;		/* source port */
-	u_int16_t th_dport;		/* destination port */
+	uint16_t th_sport;		/* source port */
+	uint16_t th_dport;		/* destination port */
 	tcp_seq	  th_seq;		/* sequence number */
 	tcp_seq	  th_ack;		/* acknowledgement number */
-#if _BYTE_ORDER == _LITTLE_ENDIAN
-	u_int32_t th_x2:4,		/* (unused) */
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+	uint32_t th_x2:4,		/* (unused) */
 		  th_off:4;		/* data offset */
 #endif
-#if _BYTE_ORDER == _BIG_ENDIAN
-	u_int32_t th_off:4,		/* data offset */
+#  if __BYTE_ORDER == __BIG_ENDIAN
+	uint32_t th_off:4,		/* data offset */
 		  th_x2:4;		/* (unused) */
 #endif
-	u_int8_t  th_flags;
+	uint8_t  th_flags;
 #define	TH_FIN	  0x01
 #define	TH_SYN	  0x02
 #define	TH_RST	  0x04
@@ -351,19 +366,47 @@ struct tcp_hdr {
 #define	TH_URG	  0x20
 #define	TH_ECE	  0x40
 #define	TH_CWR	  0x80
-	u_int16_t th_win;			/* window */
-	u_int16_t th_sum;			/* checksum */
-	u_int16_t th_urp;			/* urgent pointer */
+	uint16_t th_win;			/* window */
+	uint16_t th_sum;			/* checksum */
+	uint16_t th_urp;			/* urgent pointer */
 };
-#endif
+
 
 struct udp_hdr{
-  u_int16_t uh_sport;		/* source port */
-  u_int16_t uh_dport;		/* destination port */
-  u_int16_t uh_ulen;		/* udp length */
-  u_int16_t uh_sum;		/* udp checksum */
+  uint16_t uh_sport;		/* source port */
+  uint16_t uh_dport;		/* destination port */
+  uint16_t uh_ulen;		/* udp length */
+  uint16_t uh_sum;		/* udp checksum */
 } __attribute__ ((__packed__));
 
+
+#define	ARP_REQUEST		1
+#define ARP_REPLY		2
+#define RARP_REQUEST	3
+#define RARP_REPLY		4
+
+struct arp_hdr{
+	struct ether_header		ether;	
+	uint16_t				hard_type;		/* packet type ID field	*/
+	uint16_t				prot_type;		/* packet type ID field	*/
+	uint8_t				hard_size;
+	uint8_t				prot_size;
+	uint8_t				op;
+	struct ether_addr		src_ether;
+	struct in_addr			src_ip;
+	struct ether_addr		tgt_ether;
+	struct in_addr			tgt_ip;
+} __attribute__ ((__packed__));
+
+
+/* For obtaining an IPv6 target */
+struct target_ipv6{
+	struct in6_addr		ip6;	/* IPv6 address */
+	char name			[NI_MAXHOST]; /* Name */
+	char canonname		[NI_MAXHOST]; /* Canonic name */
+	int					res;	/* Error code */
+	unsigned int		flags;	/* Value-result: Whether the canonic name is required/obtained */
+};
 
 struct prefix_entry{
 	struct in6_addr		ip6;
@@ -401,11 +444,12 @@ struct address_list{
 };
 
 
-#define MAX_IFACES 10
+#define MAX_IFACES		25
 struct iface_entry{
 	int					ifindex;
 	char				iface[IFACE_LENGTH];	
 	struct ether_addr	ether;
+	unsigned char		ether_f;
 	struct prefix_list	ip6_global;
 	struct prefix_list  ip6_local;
 	int					flags;	
@@ -418,10 +462,99 @@ struct iface_list{
 };
 
 
+/* Constants employed by decode_ipv6_address() */
+
+#define IPV6_UNSPEC				1
+#define IPV6_MULTICAST			2
+#define IPV6_UNICAST			4
+
+#define UCAST_V4MAPPED			1
+#define UCAST_V4COMPAT			2
+#define UCAST_LINKLOCAL			4
+#define UCAST_SITELOCAL			8
+#define UCAST_UNIQUELOCAL		16
+#define UCAST_6TO4				32
+#define UCAST_TEREDO			64
+#define UCAST_GLOBAL			128
+#define UCAST_LOOPBACK			256
+
+#define MCAST_PERMANENT			512
+#define MCAST_NONPERMANENT		1024
+#define MCAST_INVALID			2048
+#define MCAST_UNICASTBASED		4096
+#define MCAST_EMBEDRP			8192
+#define MCAST_UNKNOWN			16384
+
+#define SCOPE_RESERVED			1
+#define SCOPE_INTERFACE			2
+#define SCOPE_LINK				4
+#define SCOPE_ADMIN				8
+#define SCOPE_SITE				16
+#define SCOPE_ORGANIZATION		32
+#define SCOPE_GLOBAL			64
+#define SCOPE_UNASSIGNED		128
+#define SCOPE_UNSPECIFIED		256
+
+#define IID_MACDERIVED			1
+#define IID_ISATAP				2
+#define IID_EMBEDDEDIPV4		4
+#define IID_EMBEDDEDIPV4_32		8192
+#define IID_EMBEDDEDIPV4_64		64
+#define IID_EMBEDDEDPORT		8
+#define IID_EMBEDDEDPORTREV		16
+#define IID_LOWBYTE				32
+#define IID_PATTERN_BYTES		128
+#define IID_RANDOM				256
+#define IID_TEREDO_RFC4380		512
+#define IID_TEREDO_RFC5991		1024
+#define IID_TEREDO_UNKNOWN		2048
+#define IID_UNSPECIFIED			4096
+
+
+
+/* This struture is employed by decode_ipv6_address */
+struct	decode6{
+	struct in6_addr	ip6;
+	unsigned int	type;
+	unsigned int	subtype;
+	unsigned int	scope;
+	unsigned int	iidtype;
+	unsigned int	iidsubtype;
+};
+
+
+#ifndef IN6_IS_ADDR_UNIQUELOCAL
+	#define IN6_IS_ADDR_UNIQUELOCAL(a) \
+		((((uint32_t *) (a))[0] & htonl (0xfe000000))		      \
+		 == htonl (0xfc000000))
+#endif
+
+#ifndef IN6_IS_ADDR_6TO4
+	#define IN6_IS_ADDR_6TO4(a) \
+		((((uint32_t *) (a))[0] & htonl (0xffff0000))		      \
+		 == htonl (0x20020000))
+#endif
+
+#ifndef IN6_IS_ADDR_TEREDO
+	#define IN6_IS_ADDR_TEREDO(a) \
+		(((uint32_t *) (a))[0] == htonl (0x20020000))
+#endif
+
+#ifndef IN6_IS_ADDR_TEREDO_LEGACY
+	#define IN6_IS_ADDR_TEREDO_LEGACY(a) \
+		(((uint32_t *) (a))[0] == htonl (0x3ffe831f))
+#endif
+
+
+
 
 #if defined (__FreeBSD__) || defined(__NetBSD__) || defined (__OpenBSD__) || defined(__APPLE__)
     #ifndef s6_addr16
 	    #define s6_addr16	__u6_addr.__u6_addr16
+    #endif
+
+    #ifndef s6_addr
+	    #define s6_addr		__u6_addr.__u6_addr8
     #endif
 
     #ifndef s6_addr8
@@ -431,6 +564,22 @@ struct iface_list{
     #ifndef s6_addr32
 	    #define s6_addr32	__u6_addr.__u6_addr32
     #endif
+#elif defined __linux__ || ( !defined(__FreeBSD__) && defined(__FreeBSD_kernel__))
+	#ifndef s6_addr16
+		#define s6_addr16	__in6_u.__u6_addr16
+	#endif
+
+	#ifndef s6_addr32
+		#define s6_addr32	__in6_u.__u6_addr32
+	#endif
+#elif defined(__sun) || defined(sun)
+	#ifndef s6_addr8
+		#define	s6_addr8	_S6_un._S6_u8
+	#endif
+
+	#ifndef s6_addr32
+		#define	s6_addr32	_S6_un._S6_u32
+	#endif
 #endif
 
 
@@ -459,6 +608,10 @@ struct iface_list{
 #if !(defined (__FreeBSD__) || defined(__NetBSD__) || defined (__OpenBSD__) || defined(__APPLE__))
 /* Definitions for Linux */
 
+	#ifndef _NETINET_ICMP6_H
+	#include <netinet/icmp6.h>
+	#endif
+
 	#define ICMP6_NI_QUERY			139	/* node information request */
 	#define ICMP6_NI_REPLY			140	/* node information reply */
 	/*
@@ -467,11 +620,11 @@ struct iface_list{
 
 	struct icmp6_namelookup {
 		struct icmp6_hdr 	icmp6_nl_hdr;
-		u_int8_t	icmp6_nl_nonce[8];
+		uint8_t	icmp6_nl_nonce[8];
 		int32_t		icmp6_nl_ttl;
 	#if 0
-		u_int8_t	icmp6_nl_len;
-		u_int8_t	icmp6_nl_name[3];
+		uint8_t	icmp6_nl_len;
+		uint8_t	icmp6_nl_name[3];
 	#endif
 		/* could be followed by options */
 	} __attribute__ ((__packed__));
@@ -481,7 +634,7 @@ struct iface_list{
 	 */
 	struct icmp6_nodeinfo {
 		struct icmp6_hdr icmp6_ni_hdr;
-		u_int8_t icmp6_ni_nonce[8];
+		uint8_t icmp6_ni_nonce[8];
 		/* could be followed by reply data */
 	} __attribute__ ((__packed__));
 
@@ -525,27 +678,27 @@ struct iface_list{
 	#endif
 
 	struct ni_reply_fqdn {
-		u_int32_t ni_fqdn_ttl;	/* TTL */
-		u_int8_t ni_fqdn_namelen; /* length in octets of the FQDN */
-		u_int8_t ni_fqdn_name[3]; /* XXX: alignment */
+		uint32_t ni_fqdn_ttl;	/* TTL */
+		uint8_t ni_fqdn_namelen; /* length in octets of the FQDN */
+		uint8_t ni_fqdn_name[3]; /* XXX: alignment */
 	} __attribute__ ((__packed__));
 
 #endif
 
 
 struct ni_reply_ip6 {
-	u_int32_t ni_ip6_ttl;	/* TTL */
+	uint32_t ni_ip6_ttl;	/* TTL */
 	struct in6_addr ip6; /* IPv6 address */
 } __attribute__ ((__packed__));
 
 
 struct ni_reply_ip {
-	u_int32_t ni_ip_ttl;	/* TTL */
+	uint32_t ni_ip_ttl;	/* TTL */
 	struct in_addr ip; /* IPv6 address */
 } __attribute__ ((__packed__));
 
 struct ni_reply_name {
-	u_int32_t ni_name_ttl;	/* TTL */
+	uint32_t ni_name_ttl;	/* TTL */
 	unsigned char	ni_name_name; /* IPv6 address */
 } __attribute__ ((__packed__));
 
@@ -574,8 +727,8 @@ struct iface_data{
 	int					ifindex;
 	unsigned char		ifindex_f;
 	struct iface_list	iflist;
-	int					type;
-	int					flags;
+	unsigned int		type;
+	unsigned int		flags;
 	int					fd;
 	unsigned int		pending_write_f;
 	void				*pending_write_data;
@@ -604,6 +757,7 @@ struct iface_data{
 	struct ether_addr	hdstaddr;
 	unsigned int		hdstaddr_f;
 	struct in6_addr		srcaddr;
+	unsigned int		src_f;      /* XXX Set when a source address has been selected (even if automatically) */
 	unsigned int		srcaddr_f;
 	unsigned char		srcpreflen;
 	unsigned char		srcprefix_f;
@@ -611,7 +765,6 @@ struct iface_data{
 	unsigned int		dstaddr_f;
 	unsigned int		verbose_f;
 	unsigned char		listen_f;
-	char			loopback_f;
 	unsigned char		fragh_f;
 
 	/* XXX
@@ -637,6 +790,18 @@ struct iface_data{
 #define MAX_RTPAYLOAD 1024
 #endif
 
+#if defined(__linux__)
+
+#define SLL_ADDRLEN 0
+
+struct sll_linux{
+        uint16_t sll_pkttype;          /* packet type */
+        uint16_t sll_hatype;           /* link-layer address type */
+        uint16_t sll_halen;            /* link-layer address length */
+        uint8_t sll_addr[SLL_ADDRLEN]; /* link-layer address */
+        uint16_t sll_protocol;         /* protocol */
+} __attribute__ ((__packed__));
+#endif
 
 
 struct next_hop{
@@ -657,63 +822,82 @@ struct next_hop{
 #define LOAD_PCAP_ONLY		0x01
 #define	LOAD_SRC_NXT_HOP	0x02
 
+/* Constants to signal special interface types */
+#define	IFACE_LOOPBACK			1
+#define IFACE_TUNNEL			2
 
 #ifndef SA_SIZE
+#if defined(__APPLE__)
+#define SA_SIZE(sa)                                            \
+        (  (!(sa) || ((struct sockaddr *)(sa))->sa_len == 0) ?  \
+           sizeof(long)         :                               \
+           ((struct sockaddr *)(sa))->sa_len )
+#elif defined (__FreeBSD__) || defined(__NetBSD__) || defined (__OpenBSD__)
 #define SA_SIZE(sa)                                            \
         (  (!(sa) || ((struct sockaddr *)(sa))->sa_len == 0) ?  \
            sizeof(long)         :                               \
            1 + ( (((struct sockaddr *)(sa))->sa_len - 1) | (sizeof(long) - 1) ) )
+#else
+	#define SA_SIZE(sa) sizeof(struct sockaddr)
+#endif
 #endif
 
-#ifndef SA_NEXT
-#define SA_NEXT(sa) (sa= (struct sockaddr *) ( (char *) sa + SA_SIZE(sa)))
-#endif
-
+int					address_contains_colons(char *);
 int					address_contains_ranges(char *);
-void				change_endianness(u_int32_t *, unsigned int);
-u_int16_t			dec_to_hex(u_int16_t);
+void				change_endianness(uint32_t *, unsigned int);
+void				debug_print_ifaces_data(struct iface_list *);
+uint16_t			dec_to_hex(uint16_t);
+void				decode_ipv6_address(struct decode6 *);
 int					dns_decode(unsigned char *, unsigned int, unsigned char *, char *, unsigned int, unsigned char **);
 int					dns_str2wire(char *, unsigned int, char *, unsigned int);
+void				dump_hex(void *, size_t);
 struct ether_addr	ether_multicast(const struct in6_addr *);
 int					ether_ntop(const struct ether_addr *, char *, size_t);
 int					ether_pton(const char *, struct ether_addr *, unsigned int);
 void				ether_to_ipv6_linklocal(struct ether_addr *etheraddr, struct in6_addr *ipv6addr);
 void 				*find_iface_by_index(struct iface_list *, int);
 void				*find_iface_by_name(struct iface_list *, char *);
+void				*find_iface_by_addr(struct iface_list *, struct in6_addr *);
 int					find_ipv6_router(pcap_t *, struct ether_addr *, struct in6_addr *, struct ether_addr *, struct in6_addr *);
 int					find_ipv6_router_full(pcap_t *, struct iface_data *);
 struct iface_entry  *find_matching_address(struct iface_data *, struct iface_list *, struct in6_addr *, struct in6_addr *);
 void				generate_slaac_address(struct in6_addr *, struct ether_addr *, struct in6_addr *);
 int					get_if_addrs(struct iface_data *);
 int					get_local_addrs(struct iface_data *);
-int					inc_sdev(u_int32_t *, unsigned int, u_int32_t *, double *);
+int					get_ipv6_address(struct in6_addr *, char *);
+int			 		get_ipv6_target(struct target_ipv6 *);
+int					inc_sdev(uint32_t *, unsigned int, uint32_t *, double *);
 int					init_iface_data(struct iface_data *);
 int					init_filters(struct filters *);
-u_int16_t			in_chksum(void *, void *, size_t, u_int8_t);
+uint16_t			in_chksum(void *, void *, size_t, uint8_t);
 int					insert_pad_opt(unsigned char *ptrhdr, const unsigned char *, unsigned int);
 int					ipv6_to_ether(pcap_t *, struct iface_data *, struct in6_addr *, struct ether_addr *);
 unsigned int		ip6_longest_match(struct in6_addr *, struct in6_addr *);
+int					is_iid_null(struct in6_addr *, uint8_t);
 int					is_ip6_in_address_list(struct prefix_list *, struct in6_addr *);
 int					is_ip6_in_iface_entry(struct iface_list *, int, struct in6_addr *);
 int					is_ip6_in_list(struct in6_addr *, struct host_list *);
 int					is_ip6_in_prefix_list(struct in6_addr *, struct prefix_list *);
 int					is_eq_in6_addr(struct in6_addr *, struct in6_addr *);
+unsigned int		is_service_port(uint16_t);
 int					is_time_elapsed(struct timeval *, struct timeval *, unsigned long);
 int					keyval(char *, unsigned int, char **, char **);
 int					load_dst_and_pcap(struct iface_data *, unsigned int);
 unsigned int		match_ether(struct ether_addr *, unsigned int, struct ether_addr *);
-unsigned int		match_ipv6(struct in6_addr *, u_int8_t *, unsigned int, struct in6_addr *);
+unsigned int		match_ipv6(struct in6_addr *, uint8_t *, unsigned int, struct in6_addr *);
 int 				match_ipv6_to_prefixes(struct in6_addr *, struct prefix_list *);
 void				print_filters(struct iface_data *, struct filters *);
 void				print_filter_result(struct iface_data *, const u_char *, unsigned char);
+unsigned int		print_ipv6_address(char *s, struct in6_addr *);
+unsigned int		print_ipv6_address_rev(struct in6_addr *);
 int					print_local_addrs(struct iface_data *);
 void				randomize_ether_addr(struct ether_addr *);
-void				randomize_ipv6_addr(struct in6_addr *, struct in6_addr *, u_int8_t);
+void				randomize_ipv6_addr(struct in6_addr *, struct in6_addr *, uint8_t);
 int					read_ipv6_address(char *, unsigned int, struct in6_addr *);
 int					read_prefix(char *, unsigned int, char **);
 void				release_privileges(void);
 void				sanitize_ipv4_prefix(struct prefix4_entry *);
-void				sanitize_ipv6_prefix(struct in6_addr *, u_int8_t);
+void				sanitize_ipv6_prefix(struct in6_addr *, uint8_t);
 int 				send_neighbor_advert(struct iface_data *, pcap_t *,  const u_char *);
 int					send_neighbor_solicit(struct iface_data *, struct in6_addr *);
 int					sel_src_addr(struct iface_data *);
@@ -724,5 +908,7 @@ void				sig_alarm(int);
 struct in6_addr		solicited_node(const struct in6_addr *);
 int					string_escapes(char *, unsigned int *, unsigned int);
 size_t				Strnlen(const char *, size_t);
-
+struct timeval		timeval_sub(struct timeval *, struct timeval *);
+float				time_diff_ms(struct timeval *, struct timeval *);
+unsigned int		zero_byte_iid(struct in6_addr *);
 

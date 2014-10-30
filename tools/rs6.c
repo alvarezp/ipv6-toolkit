@@ -2,7 +2,7 @@
  * rs6: A security assessment tool for attack vectors based on
  *      ICMPv6 Router Solicitation messages
  *
- * Copyright (C) 2009-2013 Fernando Gont
+ * Copyright (C) 2009-2014 Fernando Gont
  *
  * Programmed by Fernando Gont for SI6 Networks <http://www.si6networks.com>
  *
@@ -78,8 +78,8 @@ unsigned long			ul_res, ul_val;
     
 unsigned int			i, j, sources, nsources, startrand;
     
-u_int16_t				mask;
-u_int8_t				hoplimit;
+uint16_t				mask;
+uint8_t				hoplimit;
 
 struct ether_addr		linkaddr[MAX_SLLA_OPTION];
 unsigned int			nlinkaddr=0, linkaddrs;
@@ -131,7 +131,8 @@ int main(int argc, char **argv){
 		{"loop", no_argument, 0, 'l'},
 		{"sleep", no_argument, 0, 'z'},
 		{"verbose", no_argument, 0, 'v'},
-		{"help", no_argument, 0, 'h'}
+		{"help", no_argument, 0, 'h'},
+		{0, 0, 0,  0 }
 	};
 
 	char shortopts[]= "i:s:d:A:u:U:H:y:S:D:eE:F:lz:vh";
@@ -307,7 +308,7 @@ int main(int argc, char **argv){
 
 		hdrlen= atoi(optarg);
 		
-		if(hdrlen <= 8){
+		if(hdrlen < 8){
 		    puts("Bad length in Hop-by-Hop Options Header");
 		    exit(EXIT_FAILURE);
 		}
@@ -465,15 +466,13 @@ int main(int argc, char **argv){
 		   prefix fe80::/64 (that's what a link-local address looks-like in legitimate cases).
 		   The KAME implementation discards addresses in which the second highe-order 16 bits
 		   (srcaddr.s6_addr16[1] in our case) are not zero.
-		 */  
-		idata.srcaddr.s6_addr16[0]= htons(0xfe80); /* Link-local unicast prefix */
-	
-		for(i=1;i<4;i++)
-			idata.srcaddr.s6_addr16[i]=0x0000;	
-	    
-		for(i=4; i<8; i++)
-			idata.srcaddr.s6_addr16[i]=random();
+		 */
+		if ( inet_pton(AF_INET6, "fe80::", &(idata.srcaddr)) <= 0){
+			puts("inet_pton(): Error when converting address");
+			exit(EXIT_FAILURE);
+		}
 
+		randomize_ipv6_addr(&(idata.srcaddr), &(idata.srcaddr), 64);
     }
 
 
@@ -482,11 +481,12 @@ int main(int argc, char **argv){
        select the random Source Addresses from the link-local unicast prefix (fe80::/64).
      */
 	if(floods_f && !idata.srcprefix_f){
-		idata.srcaddr.s6_addr16[0]= htons(0xfe80); /* Link-local unicast prefix */
+		if ( inet_pton(AF_INET6, "fe80::", &(idata.srcaddr)) <= 0){
+			puts("inet_pton(): Error when converting address");
+			exit(EXIT_FAILURE);
+		}
 
-		for(i=1;i<8;i++)
-			idata.srcaddr.s6_addr16[i]=0x0000;
-	
+		randomize_ipv6_addr(&(idata.srcaddr), &(idata.srcaddr), 64);
 		idata.srcpreflen=64;
     }
 
@@ -498,8 +498,7 @@ int main(int argc, char **argv){
 	}
 
 	if(!idata.hsrcaddr_f)		/* Source link-layer address is randomized by default */
-		for(i=0; i<6; i++)
-			idata.hsrcaddr.a[i]= random();
+		randomize_ether_addr(&(idata.hsrcaddr));
 
 	if(!idata.hdstaddr_f)		/* Destination link-layer address defaults to all-nodes */
 		if(ether_pton(ETHER_ALLROUTERS_LINK_ADDR, &(idata.hdstaddr), sizeof(idata.hdstaddr)) == 0){
@@ -556,127 +555,139 @@ int main(int argc, char **argv){
  * that are expected to remain constant for the specified attack.
  */
 void init_packet_data(struct iface_data *idata){
-    ethernet= (struct ether_header *) buffer;
-    v6buffer = buffer + idata->linkhsize;
-    ipv6 = (struct ip6_hdr *) v6buffer;
+	struct dlt_null *dlt_null;
+	ethernet= (struct ether_header *) buffer;
+	dlt_null= (struct dlt_null *) buffer;
+	v6buffer = buffer + idata->linkhsize;
+	ipv6 = (struct ip6_hdr *) v6buffer;
 
-	if(idata->flags != IFACE_TUNNEL && idata->flags != IFACE_LOOPBACK){
-		ethernet->src = idata->hsrcaddr;
-		ethernet->dst = idata->hdstaddr;
+	if(idata->type == DLT_EN10MB){
 		ethernet->ether_type = htons(ETHERTYPE_IPV6);
+
+		if(!(idata->flags & IFACE_LOOPBACK)){
+			ethernet->src = idata->hsrcaddr;
+			ethernet->dst = idata->hdstaddr;
+		}
 	}
+	else if(idata->type == DLT_NULL){
+		dlt_null->family= PF_INET6;
+	}
+#if defined (__OpenBSD__)
+	else if(idata->type == DLT_LOOP){
+		dlt_null->family= htonl(PF_INET6);
+	}
+#endif
 
-    ipv6->ip6_flow=0;
-    ipv6->ip6_vfc= 0x60;
-    ipv6->ip6_hlim= hoplimit;
-    ipv6->ip6_src= idata->srcaddr;
-    ipv6->ip6_dst= idata->dstaddr;
-    prev_nh = (unsigned char *) &(ipv6->ip6_nxt);
+	ipv6->ip6_flow=0;
+	ipv6->ip6_vfc= 0x60;
+	ipv6->ip6_hlim= hoplimit;
+	ipv6->ip6_src= idata->srcaddr;
+	ipv6->ip6_dst= idata->dstaddr;
+	prev_nh = (unsigned char *) &(ipv6->ip6_nxt);
 
-    ptr = (unsigned char *) v6buffer + MIN_IPV6_HLEN;
+	ptr = (unsigned char *) v6buffer + MIN_IPV6_HLEN;
     
-    if(hbhopthdr_f){
-	hbhopthdrs=0;
+	if(hbhopthdr_f){
+		hbhopthdrs=0;
 	
-	while(hbhopthdrs < nhbhopthdr){
-	    if((ptr+ hbhopthdrlen[hbhopthdrs]) > (v6buffer+ idata->mtu)){
-		puts("Packet too large while processing HBH Opt. Header");
-		exit(EXIT_FAILURE);
-	    }
+		while(hbhopthdrs < nhbhopthdr){
+			if((ptr+ hbhopthdrlen[hbhopthdrs]) > (v6buffer+ idata->mtu)){
+				puts("Packet too large while processing HBH Opt. Header");
+				exit(EXIT_FAILURE);
+			}
 	    
-	    *prev_nh = IPPROTO_HOPOPTS;
-	    prev_nh = ptr;
-	    memcpy(ptr, hbhopthdr[hbhopthdrs], hbhopthdrlen[hbhopthdrs]);
-	    ptr = ptr + hbhopthdrlen[hbhopthdrs];
-	    hbhopthdrs++;
+			*prev_nh = IPPROTO_HOPOPTS;
+			prev_nh = ptr;
+			memcpy(ptr, hbhopthdr[hbhopthdrs], hbhopthdrlen[hbhopthdrs]);
+			ptr = ptr + hbhopthdrlen[hbhopthdrs];
+			hbhopthdrs++;
+		}
 	}
-    }
 
-    if(dstoptuhdr_f){
-	dstoptuhdrs=0;
+	if(dstoptuhdr_f){
+		dstoptuhdrs=0;
 	
-	while(dstoptuhdrs < ndstoptuhdr){
-	    if((ptr+ dstoptuhdrlen[dstoptuhdrs]) > (v6buffer+ idata->mtu)){
-		puts("Packet too large while processing Dest. Opt. Header (Unfrag. Part)");
-		exit(EXIT_FAILURE);
-	    }
-
-	    *prev_nh = IPPROTO_DSTOPTS;
-	    prev_nh = ptr;
-	    memcpy(ptr, dstoptuhdr[dstoptuhdrs], dstoptuhdrlen[dstoptuhdrs]);
-	    ptr = ptr + dstoptuhdrlen[dstoptuhdrs];
-	    dstoptuhdrs++;
+		while(dstoptuhdrs < ndstoptuhdr){
+			if((ptr+ dstoptuhdrlen[dstoptuhdrs]) > (v6buffer+ idata->mtu)){
+				puts("Packet too large while processing Dest. Opt. Header (Unfrag. Part)");
+				exit(EXIT_FAILURE);
+			}
+	
+			*prev_nh = IPPROTO_DSTOPTS;
+			prev_nh = ptr;
+			memcpy(ptr, dstoptuhdr[dstoptuhdrs], dstoptuhdrlen[dstoptuhdrs]);
+			ptr = ptr + dstoptuhdrlen[dstoptuhdrs];
+			dstoptuhdrs++;
+		}
 	}
-    }
 
-    /* Everything that follows is the Fragmentable Part of the packet */
-    fragpart = ptr;
+	/* Everything that follows is the Fragmentable Part of the packet */
+	 fragpart = ptr;
 
-    if(idata->fragh_f){
-    	/* Check that we are able to send the Unfragmentable Part, together with a 
-    	   Fragment Header and a chunk data over our link layer
-    	 */
-    	if( (fragpart+sizeof(fraghdr)+nfrags) > (v6buffer+idata->mtu)){
-    		puts("Unfragmentable part too large for current MTU (1500 bytes)");
-    		exit(EXIT_FAILURE);
-    	}
+	if(idata->fragh_f){
+		/* Check that we are able to send the Unfragmentable Part, together with a 
+		   Fragment Header and a chunk data over our link layer
+		 */
+		if( (fragpart+sizeof(fraghdr)+nfrags) > (v6buffer+idata->mtu)){
+			printf("Unfragmentable part too large for current MTU (%u bytes)\n", idata->mtu);
+			exit(EXIT_FAILURE);
+		}
 
-    	/* We prepare a separete Fragment Header, but we do not include it in the packet to be sent.
-    	   This Fragment Header will be used (an assembled with the rest of the packet by the 
-    	   send_packet() function.
-    	*/
-    	memset(&fraghdr, 0, FRAG_HDR_SIZE);
-    	*prev_nh = IPPROTO_FRAGMENT;
-    	prev_nh = (unsigned char *) &fraghdr;
-    }
+		/* We prepare a separete Fragment Header, but we do not include it in the packet to be sent.
+		   This Fragment Header will be used (an assembled with the rest of the packet by the 
+		   send_packet() function.
+		*/
+		memset(&fraghdr, 0, FRAG_HDR_SIZE);
+		*prev_nh = IPPROTO_FRAGMENT;
+		prev_nh = (unsigned char *) &fraghdr;
+	}
 
-    if(dstopthdr_f){
-	dstopthdrs=0;
+	if(dstopthdr_f){
+		dstopthdrs=0;
 	
-	while(dstopthdrs < ndstopthdr){
-	    if((ptr+ dstopthdrlen[dstopthdrs]) > (v6buffer+idata->max_packet_size)){
-		puts("Packet too large while processing Dest. Opt. Header (U. part) (should be using the Frag. option?)");
-		exit(EXIT_FAILURE);
-	    }
+		while(dstopthdrs < ndstopthdr){
+			if((ptr+ dstopthdrlen[dstopthdrs]) > (v6buffer+idata->max_packet_size)){
+				puts("Packet too large while processing Dest. Opt. Header (U. part) (should be using the Frag. option?)");
+				exit(EXIT_FAILURE);
+			}
 	    
-	    *prev_nh = IPPROTO_DSTOPTS;
-	    prev_nh = ptr;
-	    memcpy(ptr, dstopthdr[dstopthdrs], dstopthdrlen[dstopthdrs]);
-	    ptr = ptr + dstopthdrlen[dstopthdrs];
-	    dstopthdrs++;
+			*prev_nh = IPPROTO_DSTOPTS;
+			prev_nh = ptr;
+			memcpy(ptr, dstopthdr[dstopthdrs], dstopthdrlen[dstopthdrs]);
+			ptr = ptr + dstopthdrlen[dstopthdrs];
+			dstopthdrs++;
+		}
 	}
-    }
 
-    *prev_nh = IPPROTO_ICMPV6;
+	*prev_nh = IPPROTO_ICMPV6;
 
-    if( (ptr+sizeof(struct nd_router_solicit)) > (v6buffer+idata->max_packet_size)){
-    	puts("Packet too large while inserting Router Solicitation header (should be using Frag. option?)");
-    	exit(EXIT_FAILURE);
-    }
+	if( (ptr+sizeof(struct nd_router_solicit)) > (v6buffer+idata->max_packet_size)){
+		puts("Packet too large while inserting Router Solicitation header (should be using Frag. option?)");
+		exit(EXIT_FAILURE);
+	}
 
-    rs= (struct nd_router_solicit *) (ptr);
-    rs->nd_rs_type = ND_ROUTER_SOLICIT;
-    rs->nd_rs_code = 0;
+	rs= (struct nd_router_solicit *) (ptr);
+	rs->nd_rs_type = ND_ROUTER_SOLICIT;
+	rs->nd_rs_code = 0;
     
-    ptr += sizeof(struct nd_router_solicit);
+	ptr += sizeof(struct nd_router_solicit);
     
-    /* If a single source link-layer address is specified, it is included in all packets */
-    if(sllopt_f && nlinkaddr==1){
-        if( (ptr+sizeof(struct nd_opt_slla)) <= (v6buffer+idata->max_packet_size)){
-        	sllaopt = (struct nd_opt_slla *) ptr;
-        	sllaopt->type= ND_OPT_SOURCE_LINKADDR;
-        	sllaopt->length= SLLA_OPT_LEN;
-        	memcpy(sllaopt->address, linkaddr[0].a, ETH_ALEN);
-        	ptr += sizeof(struct nd_opt_slla);
-        }
-        else{
-        	puts("Packet too large while processing source link-layer addresss opt. (should be using Frag. option?)");
-        	exit(EXIT_FAILURE);
-        }
-    }
+	/* If a single source link-layer address is specified, it is included in all packets */
+	if(sllopt_f && nlinkaddr==1){
+		if( (ptr+sizeof(struct nd_opt_slla)) <= (v6buffer+idata->max_packet_size)){
+			sllaopt = (struct nd_opt_slla *) ptr;
+			sllaopt->type= ND_OPT_SOURCE_LINKADDR;
+			sllaopt->length= SLLA_OPT_LEN;
+			memcpy(sllaopt->address, linkaddr[0].a, ETH_ALEN);
+			ptr += sizeof(struct nd_opt_slla);
+		}
+		else{
+			puts("Packet too large while processing source link-layer addresss opt. (should be using Frag. option?)");
+			exit(EXIT_FAILURE);
+		}
+	}
     
-    startofprefixes = ptr;    
-
+	startofprefixes = ptr;    
 }
 
 
@@ -691,41 +702,14 @@ void send_packet(struct iface_data *idata){
 
 	do{
 		if(floods_f){
-		/* 
-		   When randomizing a link-local IPv6 address, select addresses that belong to
-		   the prefix fe80::/64 (that's what a link-local address looks-like in legitimate
-		   cases). The KAME implementation discards addresses in which the second highest-order
-		   16 bits (srcaddr.s6_addr16[1] in our case) are not zero.
-		*/
 		    /* 
 		        Randomize the IPv6 Source address based on the specified prefix and prefix length
 		        (defaults to fe80::/64).
 		     */  
-			startrand= idata->srcpreflen/16;
-
-			for(i=0; i<startrand; i++)
-				ipv6->ip6_src.s6_addr16[i]= 0;
-
-			for(i=startrand; i<8; i++)
-				ipv6->ip6_src.s6_addr16[i]=random();
-
-
-			if(idata->srcpreflen%16){
-				mask=0xffff;
-	    
-				for(i=0; i<(idata->srcpreflen%16); i++)
-					mask= mask>>1;
-
-				ipv6->ip6_src.s6_addr16[startrand]= ipv6->ip6_src.s6_addr16[startrand] & htons(mask);
-		    
-			}
-
-			for(i=0; i<=(idata->srcpreflen/16); i++)
-				ipv6->ip6_src.s6_addr16[i]= ipv6->ip6_src.s6_addr16[i] | idata->srcaddr.s6_addr16[i];
+			randomize_ipv6_addr(&(ipv6->ip6_src), &(idata->srcaddr), idata->srcpreflen);
 
 			if(!idata->hsrcaddr_f){
-				for(i=0; i<6; i++)
-				ethernet->src.a[i]= random();
+				randomize_ether_addr(&(ethernet->src));
 
 				/*
 				   If the source-link layer address must be included, but no value was 

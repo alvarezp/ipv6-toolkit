@@ -2,7 +2,7 @@
  * frag6: A security assessment tool that exploits potential flaws in the
  *        processing of IPv6 fragments
  *
- * Copyright (C) 2011-2013 Fernando Gont (fgont@si6networks.com)
+ * Copyright (C) 2011-2014 Fernando Gont (fgont@si6networks.com)
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,6 +31,16 @@
 #include <sys/socket.h>
 #include <sys/select.h>
 
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netinet/ip6.h>
+#include <netinet/icmp6.h>
+#include <net/if.h>
+#include <netinet/tcp.h>
+#include <netdb.h>
+#include <pcap.h>
+
+#include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
@@ -42,27 +52,14 @@
 #include <setjmp.h>
 #include <math.h>
 
-#include <pcap.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netinet/ip6.h>
-#include <netinet/icmp6.h>
-#include <net/if.h>
-#include <ifaddrs.h>
-#ifdef __linux__
-	#include <netpacket/packet.h>
-#elif defined (__FreeBSD__) || defined(__NetBSD__) || defined (__OpenBSD__) || defined(__APPLE__) || ( !defined(__FreeBSD__) && defined(__FreeBSD_kernel__))
-	#include <net/if_dl.h>
-#endif
-
 #include "frag6.h"
 #include "ipv6toolkit.h"
 #include "libipv6.h"
-#include <netinet/tcp.h>
 
+#define DEBUG
 
 /* Function prototypes */
-int					predict_frag_id(u_int32_t *, unsigned int, u_int32_t *, unsigned int);
+int					predict_frag_id(uint32_t *, unsigned int, uint32_t *, unsigned int);
 void				print_attack_info(struct iface_data *);
 void				print_help(void);
 void 				print_icmp6_echo(struct iface_data *, struct pcap_pkthdr *, const u_char *);
@@ -71,7 +68,7 @@ void 				process_icmp6_echo(struct iface_data *, struct pcap_pkthdr *, const u_c
 void 				process_icmp6_timed(struct iface_data *, struct pcap_pkthdr *, const u_char *, unsigned char *);
 int					send_fid_probe(struct iface_data *);
 int 				send_fragment(struct iface_data *, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int);
-int 				send_fragment2(struct iface_data *, u_int16_t, unsigned int, unsigned int, unsigned int, unsigned int, char *);
+int 				send_fragment2(struct iface_data *, uint16_t, unsigned int, unsigned int, unsigned int, unsigned int, char *);
 int					test_frag_pattern(unsigned char *, unsigned int, char *);
 void				usage(void);
 int 				valid_icmp6_response(struct iface_data *, struct pcap_pkthdr *, const u_char *);
@@ -79,8 +76,6 @@ int					valid_icmp6_response2(struct iface_data *, struct pcap_pkthdr *, const u
 
 /* Used for router discovery */
 struct iface_data	idata;
-struct prefix_entry	*prefix_ols[MAX_PREFIXES_ONLINK], *prefix_acs[MAX_PREFIXES_AUTO];
-struct prefix_entry	*prefix_local[MAX_LOCAL_ADDRESSES];
 struct in6_addr		randprefix;
 unsigned char		randpreflen;
 
@@ -123,8 +118,8 @@ unsigned long		ul_res, ul_val;
 unsigned int		i, j, startrand;
 unsigned int		skip;
 unsigned int		frags, nfrags, nsleep;
-u_int16_t			mask, ip6length;
-u_int8_t			hoplimit;
+uint16_t			mask, ip6length;
+uint8_t			hoplimit;
 
 char 				plinkaddr[ETHER_ADDR_PLEN];
 char 				psrcaddr[INET6_ADDRSTRLEN], pdstaddr[INET6_ADDRSTRLEN], pv6addr[INET6_ADDRSTRLEN];
@@ -134,7 +129,7 @@ unsigned char 		loop_f=0, sleep_f=0, localaddr_f=0, tstamp_f=1, pod_f=0;
 unsigned char		srcprefix_f=0, hoplimit_f=0, ip6length_f=0, icmp6psize_f=0;
 unsigned char		fsize_f=0, forder_f=0, foffset_f=0, fid_f=0, fragp_f=0, fragidp_f=0, resp_f=1;
 
-u_int32_t			fsize, foffset, fid, id;
+uint32_t			fsize, foffset, fid, id;
 unsigned int		forder, overlap, minfragsize;
 
 /* Support for Extension Headers */
@@ -169,24 +164,25 @@ char				block8[8]={'a', 'a', 'd', 'd', 'c', 'c', 'b', 'b'};
 
 
 /* For the sampling of Fragment Identification values */
-u_int16_t			addr_sig, addr_key;
-u_int32_t			icmp6_sig;
+uint16_t			addr_sig, addr_key;
+uint32_t			icmp6_sig;
 
 int main(int argc, char **argv){
-	extern char		*optarg;	
-	char			*endptr; /* Used by strtoul() */
-	fd_set			sset, rset;
-	struct timeval	timeout;
-	int				r, sel;
-	time_t			curtime, start, lastfrag=0, lastfrag1=0, lastfrag2=0;
-	time_t			lastfrag3=0, lastfrag4=0, lastfrag5=0;
-	unsigned int	responses=0, maxsizedchunk;
+	extern char			*optarg;	
+	char				*endptr; /* Used by strtoul() */
+	fd_set				sset, rset;
+	struct timeval		timeout;
+	struct target_ipv6	targetipv6;
+	int					r, sel;
+	time_t				curtime, start, lastfrag=0, lastfrag1=0, lastfrag2=0;
+	time_t				lastfrag3=0, lastfrag4=0, lastfrag5=0;
+	unsigned int		responses=0, maxsizedchunk;
 
 	/* Array for storing the Fragment reassembly policy test results */
 	unsigned char	test[5];
 
 	/* Arrays for storing the Fragment ID samples */
-	u_int32_t		test1[NSAMPLES], test2[NSAMPLES];
+	uint32_t		test1[NSAMPLES], test2[NSAMPLES];
 	unsigned int	ntest1=0, ntest2=0;
 	unsigned char	testtype;
 
@@ -213,7 +209,8 @@ int main(int argc, char **argv){
 		{"loop", no_argument, 0, 'l'},
 		{"sleep", required_argument, 0, 'z'},
 		{"verbose", no_argument, 0, 'v'},
-		{"help", no_argument, 0, 'h'}
+		{"help", no_argument, 0, 'h'},
+		{0, 0, 0,  0 }
 	};
 
 	char shortopts[]= "i:S:D:s:d:A:u:U:H:P:O:o:I:TnpWXF:lz:vh";
@@ -269,11 +266,23 @@ int main(int argc, char **argv){
 				break;
 	    
 			case 'd':	/* IPv6 Destination Address */
-				if( inet_pton(AF_INET6, optarg, &(idata.dstaddr)) <= 0){
-					puts("inet_pton(): address not valid");
-					exit(EXIT_FAILURE);
+				strncpy( targetipv6.name, optarg, NI_MAXHOST);
+				targetipv6.name[NI_MAXHOST-1]= 0;
+				targetipv6.flags= AI_CANONNAME;
+
+				if( (r=get_ipv6_target(&targetipv6)) != 0){
+
+					if(r < 0){
+						printf("Unknown Destination: %s\n", gai_strerror(targetipv6.res));
+					}
+					else{
+						puts("Unknown Destination: No IPv6 address found for specified destination");
+					}
+
+					exit(1);
 				}
-		
+
+				idata.dstaddr= targetipv6.ip6;
 				idata.dstaddr_f = 1;
 				break;
 
@@ -378,7 +387,7 @@ int main(int argc, char **argv){
 
 				hdrlen= atoi(optarg);
 		
-				if(hdrlen <= 8){
+				if(hdrlen < 8){
 					puts("Bad length in Hop-by-Hop Options Header");
 					exit(EXIT_FAILURE);
 				}
@@ -639,14 +648,18 @@ int main(int argc, char **argv){
 			exit(EXIT_FAILURE);
 		}
 
-		if( (idata.fd= pcap_fileno(idata.pfd)) == -1){
-			puts("Error obtaining descriptor number for pcap_t");
-			exit(EXIT_FAILURE);
-		}
-
 		FD_ZERO(&sset);
 		FD_SET(idata.fd, &sset);
 		start= time(NULL);
+
+		/*
+		   This "schedules" the sending of probes for different types of packets. At most two probes
+		   will be sent for each packet type. Probe #1 will be sent now, and resent after QUERY_TIMEOUT/2
+		   seconds. Probe #2 will be sent in 1 second, and resent after QUERY_TIMEOUT/2 seconds... etc.
+		   This means that starting now, we send one probe for each packet type, one per second (to avoid
+		   congesting the network). And we resend the probes in after QUERY_TIMEOUT/2 seconds (hence we
+		   have QUERY_TIMEOUT/2 to wait for the responses of such probes).
+		 */
 		lastfrag1= start - QUERY_TIMEOUT/2;
 		lastfrag2= start - QUERY_TIMEOUT/2 + 1;
 		lastfrag3= start - QUERY_TIMEOUT/2 + 2;
@@ -657,6 +670,10 @@ int main(int argc, char **argv){
 		while(1){
 			curtime=time(NULL);
 
+			/*
+			   If we have already the timeout value, or already have results for each of the five tests,
+			   exit the loop
+			 */
 			if((curtime - start) >= QUERY_TIMEOUT || responses >= 5){
 				break;
 			}
@@ -781,8 +798,14 @@ int main(int argc, char **argv){
 			}
 
 			rset= sset;
+
+#if !defined(sun) && !defined(__sun)
 			timeout.tv_usec=0;
 			timeout.tv_sec= 1;
+#else
+			timeout.tv_usec=10000;
+			timeout.tv_sec= 0;
+#endif
 
 			if((sel=select(idata.fd+1, &rset, NULL, NULL, &timeout)) == -1){
 				if(errno == EINTR){
@@ -794,57 +817,58 @@ int main(int argc, char **argv){
 				}
 			}
 
-			if(sel == 0)
-				continue;
-
-			/* Read a packet (Echo Reply, ICMPv6 Error, or Neighbor Solicitation) */
-			if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
-				printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
-				exit(EXIT_FAILURE);
-			}
-			else if(r == 0){
-				continue; /* Should never happen */
-			}
-
-			pkt_ether = (struct ether_header *) pktdata;
-			pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
-			pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
-			pkt_ns= (struct nd_neighbor_solicit *) pkt_icmp6;
-			pkt_end = (unsigned char *) pktdata + pkthdr->caplen;
-
-			if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN))
-				continue;
-
-			if(pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6){
-				if(idata.type == DLT_EN10MB && idata.flags != IFACE_LOOPBACK && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
-					if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
-						continue;
-					/* 
-					    If the addresses that we're using are not actually configured on the local system
-					    (i.e., they are "spoofed", we must check whether it is a Neighbor Solicitation for 
-					    one of our addresses, and respond with a Neighbor Advertisement. Otherwise, the kernel
-					    will take care of that.
-					 */
-					if(idata.type == DLT_EN10MB && idata.flags != IFACE_LOOPBACK && !localaddr_f && \
-									is_eq_in6_addr(&(pkt_ns->nd_ns_target), &idata.srcaddr)){
-							if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
-								puts("Error sending Neighbor Advertisement");
-								exit(EXIT_FAILURE);
-							}
-					}
+#if defined(sun) || defined(__sun)
+			if(TRUE){
+#else
+			if(sel && FD_ISSET(idata.fd, &rset)){
+#endif
+				/* Read a packet (Echo Reply, ICMPv6 Error, or Neighbor Solicitation) */
+				if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
+					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
+					exit(EXIT_FAILURE);
 				}
-				else if( (pkt_icmp6->icmp6_type == ICMP6_ECHO_REPLY) || (pkt_icmp6->icmp6_type == ICMP6_TIME_EXCEEDED)){
-					if( (pkt_end - (unsigned char *) pkt_icmp6) < sizeof(struct icmp6_hdr))
+				else if(r == 1){
+					pkt_ether = (struct ether_header *) pktdata;
+					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
+					pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
+					pkt_ns= (struct nd_neighbor_solicit *) pkt_icmp6;
+					pkt_end = (unsigned char *) pktdata + pkthdr->caplen;
+
+					if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN))
 						continue;
 
-					switch(pkt_icmp6->icmp6_type){
-						case ICMP6_ECHO_REPLY:
-							process_icmp6_echo(&idata, pkthdr, pktdata, test, &responses);
-							break;
+					if(pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6){
+						if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK) && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
+							if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
+								continue;
+							/* 
+								If the addresses that we're using are not actually configured on the local system
+								(i.e., they are "spoofed", we must check whether it is a Neighbor Solicitation for 
+								one of our addresses, and respond with a Neighbor Advertisement. Otherwise, the kernel
+								will take care of that.
+							 */
+							if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK) && !localaddr_f && \
+											is_eq_in6_addr(&(pkt_ns->nd_ns_target), &idata.srcaddr)){
+									if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
+										puts("Error sending Neighbor Advertisement");
+										exit(EXIT_FAILURE);
+									}
+							}
+						}
+						else if( (pkt_icmp6->icmp6_type == ICMP6_ECHO_REPLY) || (pkt_icmp6->icmp6_type == ICMP6_TIME_EXCEEDED)){
+							if( (pkt_end - (unsigned char *) pkt_icmp6) < sizeof(struct icmp6_hdr))
+								continue;
 
-						case ICMP6_TIME_EXCEEDED:
-							process_icmp6_timed(&idata, pkthdr, pktdata, test);
-							break;
+							switch(pkt_icmp6->icmp6_type){
+								case ICMP6_ECHO_REPLY:
+									process_icmp6_echo(&idata, pkthdr, pktdata, test, &responses);
+									break;
+
+								case ICMP6_TIME_EXCEEDED:
+									process_icmp6_timed(&idata, pkthdr, pktdata, test);
+									break;
+							}
+						}
 					}
 				}
 			}
@@ -920,6 +944,11 @@ int main(int argc, char **argv){
 		while(1){
 			curtime=time(NULL);
 
+			/*
+			    If we were doing tests from a single origin, and we have reached the assessment timeout
+			    or already have enough samples, we must now sample from multiple origins.
+
+			 */
 			if( testtype==FIXED_ORIGIN && ((curtime - start) >= FID_ASSESS_TIMEOUT || ntest1 >= NSAMPLES)){
 				testtype= MULTI_ORIGIN;
 				addr_sig= random();
@@ -931,6 +960,10 @@ int main(int argc, char **argv){
 				break;
 			}
 
+			/*
+			    lastfrag1 contains the timestamp (in seconds) of the last time we sent probe packets.
+			    Hence we will be sending "batches" of probe packets every second.
+			 */
 			if((curtime - lastfrag1) >= 1){
 				if(testtype == FIXED_ORIGIN){
 					for(i=0; i< (NSAMPLES/NBATCHES); i++){
@@ -949,8 +982,9 @@ int main(int argc, char **argv){
 						 * to Neighbor Solicitations that target those addresses, and accept ICMPv6 Echo Replies
 						 * only if they are destined to those addresses
 						 */
-						idata.srcaddr.s6_addr16[5]= addr_sig;
-						idata.srcaddr.s6_addr16[7] =  idata.srcaddr.s6_addr16[6] ^ addr_key;
+						idata.srcaddr.s6_addr32[2]= htonl((ntohl(idata.srcaddr.s6_addr32[2]) & 0xffff0000) | addr_sig);
+						idata.srcaddr.s6_addr32[3]= htonl((ntohl(idata.srcaddr.s6_addr32[3]) & 0xffff0000) | \
+						                            ((uint16_t)(ntohl(idata.srcaddr.s6_addr32[3])>>16) ^ addr_key));
 
 						/*
 						 * XXX This trick is innefective with OpenBSD. Hence we don't try to prevent the
@@ -974,8 +1008,13 @@ int main(int argc, char **argv){
 			}
 
 			rset= sset;
+#if !defined(sun) && !defined(__sun)
 			timeout.tv_usec=0;
 			timeout.tv_sec= 1;
+#else
+			timeout.tv_usec=10000;
+			timeout.tv_sec= 0;
+#endif
 
 			if((sel=select(idata.fd+1, &rset, NULL, NULL, &timeout)) == -1){
 				if(errno == EINTR){
@@ -987,122 +1026,124 @@ int main(int argc, char **argv){
 				}
 			}
 
-			if(sel == 0)
-				continue;
-
-			/* Read a packet (Echo Reply, or Neighbor Solicitation) */
-			if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
-				printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
-				exit(EXIT_FAILURE);
-			}
-			else if(r == 0){
-				continue; /* Should never happen */
-			}
-
-			pkt_ether = (struct ether_header *) pktdata;
-			pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
-			pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
-			pkt_end = (unsigned char *) pktdata + pkthdr->caplen;
-
-			if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN))
-				continue;
-
-			if(idata.type == DLT_EN10MB && idata.flags != IFACE_LOOPBACK && \
-							pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6 && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
-				pkt_ns= (struct nd_neighbor_solicit *) pkt_icmp6;
-
-				if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
-					continue;
-				/* 
-				    If the addresses that we're using are not actually configured on the local system
-				    (i.e., they are "spoofed", we must check whether it is a Neighbor Solicitation for 
-				    one of our addresses, and respond with a Neighbor Advertisement. Otherwise, the kernel
-				    will take care of that.
-				 */
-				if(testtype==FIXED_ORIGIN){
-					if(idata.type == DLT_EN10MB && idata.flags != IFACE_LOOPBACK && \
-							 !localaddr_f && is_eq_in6_addr(&(pkt_ns->nd_ns_target), &(idata.srcaddr))){
-						if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
-							puts("Error sending Neighbor Advertisement");
-							exit(EXIT_FAILURE);
-						}
-					}
+#if defined(sun) || defined(__sun)
+			if(TRUE){
+#else
+			if(sel && FD_ISSET(idata.fd, &rset)){
+#endif
+				/* Read a packet (Echo Reply, or Neighbor Solicitation) */
+				if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
+					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
+					exit(EXIT_FAILURE);
 				}
-				else if(idata.type == DLT_EN10MB && idata.flags != IFACE_LOOPBACK){
-					if(pkt_ns->nd_ns_target.s6_addr16[5] != addr_sig || \
-						pkt_ns->nd_ns_target.s6_addr16[7] !=  (pkt_ns->nd_ns_target.s6_addr16[6] ^ addr_key))
+				else if(r == 1){
+					pkt_ether = (struct ether_header *) pktdata;
+					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
+					pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
+					pkt_end = (unsigned char *) pktdata + pkthdr->caplen;
+
+					if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN))
 						continue;
 
-					if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
-						puts("Error sending Neighbor Advertisement");
-						exit(EXIT_FAILURE);
-					}
-				}				
-			}
-			else if(pkt_ipv6->ip6_nxt == IPPROTO_FRAGMENT){
-				if( (pkt_end - (unsigned char *) pkt_ipv6) < \
-					(sizeof(struct ip6_hdr) + sizeof(struct ip6_frag) + sizeof(struct icmp6_hdr) + sizeof(u_int32_t)))
-					continue;
+					if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK) && \
+									pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6 && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
+						pkt_ns= (struct nd_neighbor_solicit *) pkt_icmp6;
 
-				pkt_fh= (struct ip6_frag *) ( (unsigned char *)pkt_ipv6 + sizeof(struct ip6_hdr));
-
-				if(pkt_fh->ip6f_nxt != IPPROTO_ICMPV6)
-					continue;
-
-				/* XXX We only sample non-first fragments (see below) */
-				if(!(pkt_fh->ip6f_offlg & IP6F_OFF_MASK))
-					continue;
-
-				/*
-				 * XXX These checks were removed, since when assessing some implementations on a local
-				 * network, we never get the first fragment because it is discarded when it triggers ND.
-				 */
-				if(!(pkt_fh->ip6f_offlg & IP6F_OFF_MASK)){
-					pkt_icmp6= (struct icmp6_hdr *) ((unsigned char *)pkt_fh + sizeof(struct ip6_frag));
-
-					if(pkt_icmp6->icmp6_type != ICMP6_ECHO_REPLY)
-						continue;
-
-					if(ntohs(pkt_icmp6->icmp6_data16[0]) != getpid() )
-						continue;
-				}
-
-				if(testtype==FIXED_ORIGIN){
-					if(!is_eq_in6_addr(&(pkt_ipv6->ip6_dst), &(idata.srcaddr))){
-						continue;
-					}
-
-					/* XXX Not used when sampling non-first fragments */
-					if(!(pkt_fh->ip6f_offlg & IP6F_OFF_MASK)){
-						if( *(u_int32_t *)((unsigned char *)pkt_icmp6+ sizeof(struct icmp6_hdr)) != icmp6_sig){
+						if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
 							continue;
+						/* 
+							If the addresses that we're using are not actually configured on the local system
+							(i.e., they are "spoofed", we must check whether it is a Neighbor Solicitation for 
+							one of our addresses, and respond with a Neighbor Advertisement. Otherwise, the kernel
+							will take care of that.
+						 */
+						if(testtype==FIXED_ORIGIN){
+							if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK) && \
+									 !localaddr_f && is_eq_in6_addr(&(pkt_ns->nd_ns_target), &(idata.srcaddr))){
+								if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
+									puts("Error sending Neighbor Advertisement");
+									exit(EXIT_FAILURE);
+								}
+							}
 						}
+						else if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK)){
+							if( (ntohl(pkt_ns->nd_ns_target.s6_addr32[2]) & 0x0000ffff) != addr_sig || \
+								(ntohl(pkt_ns->nd_ns_target.s6_addr32[3]) & 0x0000ffff) != ( (ntohl(pkt_ns->nd_ns_target.s6_addr32[3])>>16) ^ addr_key)){
+								continue;
+							}
+
+							if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
+								puts("Error sending Neighbor Advertisement");
+								exit(EXIT_FAILURE);
+							}
+						}				
 					}
-
-					if(ntest1 >= NSAMPLES)
-						continue;
-
-					test1[ntest1]= ntohl(pkt_fh->ip6f_ident);
-					ntest1++;
-				}
-				else{
-					if(pkt_ipv6->ip6_dst.s6_addr16[5] != addr_sig || \
-						pkt_ipv6->ip6_dst.s6_addr16[7] !=  (pkt_ipv6->ip6_dst.s6_addr16[6] ^ addr_key)){
-						continue;
-					}
-
-					/* XXX Not used when sampling non-first fragments */
-					if(!(pkt_fh->ip6f_offlg & IP6F_OFF_MASK)){
-						if( *(u_int32_t *)((unsigned char *)pkt_icmp6+ sizeof(struct icmp6_hdr)) != icmp6_sig){
+					else if(pkt_ipv6->ip6_nxt == IPPROTO_FRAGMENT){
+						if( (pkt_end - (unsigned char *) pkt_ipv6) < \
+							(sizeof(struct ip6_hdr) + sizeof(struct ip6_frag) + sizeof(struct icmp6_hdr) + sizeof(uint32_t)))
 							continue;
+
+						pkt_fh= (struct ip6_frag *) ( (unsigned char *)pkt_ipv6 + sizeof(struct ip6_hdr));
+
+						if(pkt_fh->ip6f_nxt != IPPROTO_ICMPV6)
+							continue;
+
+						/* XXX We only sample non-first fragments (see below) */
+						if(!(pkt_fh->ip6f_offlg & IP6F_OFF_MASK))
+							continue;
+
+						/*
+						 * XXX These checks were removed, since when assessing some implementations on a local
+						 * network, we never get the first fragment because it is discarded when it triggers ND.
+						 */
+						if(!(pkt_fh->ip6f_offlg & IP6F_OFF_MASK)){
+							pkt_icmp6= (struct icmp6_hdr *) ((unsigned char *)pkt_fh + sizeof(struct ip6_frag));
+
+							if(pkt_icmp6->icmp6_type != ICMP6_ECHO_REPLY)
+								continue;
+
+							if(ntohs(pkt_icmp6->icmp6_data16[0]) != getpid() )
+								continue;
+						}
+
+						if(testtype==FIXED_ORIGIN){
+							if(!is_eq_in6_addr(&(pkt_ipv6->ip6_dst), &(idata.srcaddr))){
+								continue;
+							}
+
+							/* XXX Not used when sampling non-first fragments */
+							if(!(pkt_fh->ip6f_offlg & IP6F_OFF_MASK)){
+								if( *(uint32_t *)((unsigned char *)pkt_icmp6+ sizeof(struct icmp6_hdr)) != icmp6_sig){
+									continue;
+								}
+							}
+
+							if(ntest1 >= NSAMPLES)
+								continue;
+
+							test1[ntest1]= ntohl(pkt_fh->ip6f_ident);
+							ntest1++;
+						}
+						else{
+							if( (ntohl(pkt_ipv6->ip6_dst.s6_addr32[2]) & 0x0000ffff) != addr_sig || \
+								(ntohl(pkt_ipv6->ip6_dst.s6_addr32[3]) & 0x0000ffff) !=  ( (ntohl(pkt_ipv6->ip6_dst.s6_addr32[3])>>16) ^ addr_key)){
+								continue;
+							}
+
+							/* XXX Not used when sampling non-first fragments */
+							if(!(pkt_fh->ip6f_offlg & IP6F_OFF_MASK)){
+								if( *(uint32_t *)((unsigned char *)pkt_icmp6+ sizeof(struct icmp6_hdr)) != icmp6_sig){
+									continue;
+								}
+							}
+
+							if(ntest2 >= NSAMPLES)
+								continue;
+
+							test2[ntest2]= ntohl(pkt_fh->ip6f_ident);
+							ntest2++;
 						}
 					}
-
-					if(ntest2 >= NSAMPLES)
-						continue;
-
-					test2[ntest2]= ntohl(pkt_fh->ip6f_ident);
-					ntest2++;
 				}
 			}
 		}
@@ -1214,11 +1255,6 @@ int main(int argc, char **argv){
 
 		pcap_freecode(&pcap_filter);
 
-		if( (idata.fd= pcap_fileno(idata.pfd)) == -1){
-			puts("Error obtaining descriptor number for pcap_t");
-			exit(EXIT_FAILURE);
-		}
-
 		FD_ZERO(&sset);
 		FD_SET(idata.fd, &sset);
 		lastfrag=0;
@@ -1273,68 +1309,69 @@ int main(int argc, char **argv){
 				}
 			}
 
-			if(sel == 0)
-				continue;
-
-			/* Read a packet (Echo Reply, ICMPv6 Error, or Neighbor Solicitation) */
-			if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
-				printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
-				exit(EXIT_FAILURE);
-			}
-			else if(r == 0){
-				continue; /* Should never happen */
-			}
-
-			pkt_ether = (struct ether_header *) pktdata;
-			pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
-			pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
-			pkt_ns= (struct nd_neighbor_solicit *) pkt_icmp6;
-			pkt_end = (unsigned char *) pktdata + pkthdr->caplen;
-
-			if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN))
-				continue;
-
-			if(pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6){
-				if(idata.type == DLT_EN10MB && idata.flags != IFACE_LOOPBACK && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
-					if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
-						continue;
-					/* 
-					    If the addresses that we're using are not actually configured on the local system
-					    (i.e., they are "spoofed", we must check whether it is a Neighbor Solicitation for 
-					    one of our addresses, and respond with a Neighbor Advertisement. Otherwise, the kernel
-					    will take care of that.
-					 */
-					if(idata.type == DLT_EN10MB && idata.flags != IFACE_LOOPBACK && !localaddr_f && \
-									is_eq_in6_addr(&(pkt_ns->nd_ns_target), &(idata.srcaddr))){
-							if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
-								puts("Error sending Neighbor Advertisement");
-								exit(EXIT_FAILURE);
-							}
-					}
+#if defined(sun) || defined(__sun)
+			if(TRUE){
+#else
+			if(sel && FD_ISSET(idata.fd, &rset)){
+#endif
+				/* Read a packet (Echo Reply, ICMPv6 Error, or Neighbor Solicitation) */
+				if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
+					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
+					exit(EXIT_FAILURE);
 				}
-				else if( (pkt_icmp6->icmp6_type == ICMP6_ECHO_REPLY) || (pkt_icmp6->icmp6_type == ICMP6_TIME_EXCEEDED)){
-					if( (pkt_end - (unsigned char *) pkt_icmp6) < sizeof(struct icmp6_hdr))
+				else if(r == 1){
+					pkt_ether = (struct ether_header *) pktdata;
+					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
+					pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
+					pkt_ns= (struct nd_neighbor_solicit *) pkt_icmp6;
+					pkt_end = (unsigned char *) pktdata + pkthdr->caplen;
+
+					if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN))
 						continue;
-					/*
-					   Do a preliminar validation check on the ICMPv6 packet (packet size, Source Address,
-					   and Destination Address).
-					 */
-					if(!valid_icmp6_response(&idata, pkthdr, pktdata)){
-						continue;
-					}
 
-					switch(pkt_icmp6->icmp6_type){
-						case ICMP6_ECHO_REPLY:
-							if(resp_f)
-								print_icmp6_echo(&idata, pkthdr, pktdata);
+					if(pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6){
+						if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK) && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
+							if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
+								continue;
+							/* 
+								If the addresses that we're using are not actually configured on the local system
+								(i.e., they are "spoofed", we must check whether it is a Neighbor Solicitation for 
+								one of our addresses, and respond with a Neighbor Advertisement. Otherwise, the kernel
+								will take care of that.
+							 */
+							if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK) && !localaddr_f && \
+											is_eq_in6_addr(&(pkt_ns->nd_ns_target), &(idata.srcaddr))){
+									if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
+										puts("Error sending Neighbor Advertisement");
+										exit(EXIT_FAILURE);
+									}
+							}
+						}
+						else if( (pkt_icmp6->icmp6_type == ICMP6_ECHO_REPLY) || (pkt_icmp6->icmp6_type == ICMP6_TIME_EXCEEDED)){
+							if( (pkt_end - (unsigned char *) pkt_icmp6) < sizeof(struct icmp6_hdr))
+								continue;
+							/*
+							   Do a preliminar validation check on the ICMPv6 packet (packet size, Source Address,
+							   and Destination Address).
+							 */
+							if(!valid_icmp6_response(&idata, pkthdr, pktdata)){
+								continue;
+							}
 
-							break;
+							switch(pkt_icmp6->icmp6_type){
+								case ICMP6_ECHO_REPLY:
+									if(resp_f)
+										print_icmp6_echo(&idata, pkthdr, pktdata);
 
-						case ICMP6_TIME_EXCEEDED:
-							if(resp_f)
-								print_icmp6_timed(&idata, pkthdr, pktdata);
+									break;
 
-							break;
+								case ICMP6_TIME_EXCEEDED:
+									if(resp_f)
+										print_icmp6_timed(&idata, pkthdr, pktdata);
+
+									break;
+							}
+						}
 					}
 				}
 			}
@@ -1348,7 +1385,7 @@ int main(int argc, char **argv){
 
 
 /*
- * Function: print_icmp6_info()
+ * Function: print_icmp6_echo()
  *
  * Print information about a received ICMPv6 Echo Response packet
  */
@@ -1366,7 +1403,7 @@ void print_icmp6_echo(struct iface_data *idata, struct pcap_pkthdr *pkthdr, cons
 	rtt= time(NULL) - *(time_t *) ( (unsigned char *) pkt_ipv6 + (sizeof(struct ip6_hdr) + sizeof(struct icmp6_hdr)));
 	printf("ICMPv6 echo Reply from %s", pv6addr);
 	if(rtt > 0)
-		printf(" (RTT: %u second%s)\n", (u_int32_t)rtt, (rtt>1)?"s":"");
+		printf(" (RTT: %u second%s)\n", (uint32_t)rtt, (rtt>1)?"s":"");
 	else
 		puts(" (RTT: < 1 second)"); 
 }
@@ -1382,7 +1419,7 @@ void print_icmp6_timed(struct iface_data *idata, struct pcap_pkthdr *pkthdr, con
 	struct icmp6_hdr	*pkt_icmp6, *pkt_icmp6_icmp6;
 	struct ip6_ext		*pkt_ext;
 	struct ip6_frag		*pkt_fh_fh;
-	u_int8_t			pkt_prev_nh;
+	uint8_t			pkt_prev_nh;
 	time_t				rtt;
 
 	pkt_ipv6 = (struct ip6_hdr *) (pktdata + idata->linkhsize);
@@ -1442,7 +1479,7 @@ void print_icmp6_timed(struct iface_data *idata, struct pcap_pkthdr *pkthdr, con
 		pkt_ptr= ((unsigned char *) pkt_icmp6_icmp6+ sizeof(struct icmp6_hdr));
 
 		/* Verify our "checksum" */
-		if(*(u_int32_t *)(pkt_ptr+sizeof(time_t)) != ((*(u_int32_t *)pkt_ptr) ^ 0xabcdabcd)){
+		if(*(uint32_t *)(pkt_ptr+sizeof(time_t)) != ((*(uint32_t *)pkt_ptr) ^ 0xabcdabcd)){
 			return;
 		}
 
@@ -1588,7 +1625,7 @@ void process_icmp6_timed(struct iface_data *idata, struct pcap_pkthdr *pkthdr, c
 	struct icmp6_hdr	*pkt_icmp6, *pkt_icmp6_icmp6;
 	struct ip6_ext		*pkt_ext;
 	struct ip6_frag		*pkt_fh_fh;
-	u_int8_t			pkt_prev_nh;
+	uint8_t			pkt_prev_nh;
 
 	pkt_ipv6 = (struct ip6_hdr *) (pktdata + idata->linkhsize);
 	pkt_icmp6= (struct icmp6_hdr *) ((unsigned char *) pkt_ipv6 + sizeof(struct ip6_hdr));
@@ -1693,7 +1730,7 @@ void process_icmp6_timed(struct iface_data *idata, struct pcap_pkthdr *pkthdr, c
  *
  * Sends an IPv6 for evaluating the fragment reassembly policy
  */
-int send_fragment2(struct iface_data *idata, u_int16_t ip6len, unsigned int id, unsigned int offset, unsigned int fsize, unsigned int order, \
+int send_fragment2(struct iface_data *idata, uint16_t ip6len, unsigned int id, unsigned int offset, unsigned int fsize, unsigned int order, \
 						char *block){
 	unsigned char	*ptrend;
 
@@ -1703,14 +1740,22 @@ int send_fragment2(struct iface_data *idata, u_int16_t ip6len, unsigned int id, 
 	ipv6 = (struct ip6_hdr *) v6buffer;
 	fsize= (fsize>>3) << 3;
 
-	if(idata->type == DLT_EN10MB && idata->flags != IFACE_LOOPBACK){
-		ethernet->src = idata->hsrcaddr;
-		ethernet->dst = idata->hdstaddr;
+	if(idata->type == DLT_EN10MB){
 		ethernet->ether_type = htons(ETHERTYPE_IPV6);
+
+		if(!(idata->flags & IFACE_LOOPBACK)){
+			ethernet->src = idata->hsrcaddr;
+			ethernet->dst = idata->hdstaddr;
+		}
 	}
 	else if(idata->type == DLT_NULL){
 		dlt_null->family= PF_INET6;
 	}
+#if defined (__OpenBSD__)
+	else if(idata->type == DLT_LOOP){
+		dlt_null->family= htonl(PF_INET6);
+	}
+#endif
 
 	ipv6->ip6_flow=0;
 	ipv6->ip6_vfc= 0x60;
@@ -1839,14 +1884,22 @@ int send_fragment(struct iface_data *idata, unsigned int id, unsigned int offset
 	v6buffer = buffer + idata->linkhsize;
 	ipv6 = (struct ip6_hdr *) v6buffer;
 
-	if(idata->type == DLT_EN10MB && idata->flags != IFACE_LOOPBACK){
-		ethernet->src = idata->hsrcaddr;
-		ethernet->dst = idata->hdstaddr;
+	if(idata->type == DLT_EN10MB){
 		ethernet->ether_type = htons(ETHERTYPE_IPV6);
+
+		if(!(idata->flags & IFACE_LOOPBACK)){
+			ethernet->src = idata->hsrcaddr;
+			ethernet->dst = idata->hdstaddr;
+		}
 	}
 	else if(idata->type == DLT_NULL){
 		dlt_null->family= PF_INET6;
 	}
+#if defined (__OpenBSD__)
+	else if(idata->type == DLT_LOOP){
+		dlt_null->family= htonl(PF_INET6);
+	}
+#endif
 
 	ipv6->ip6_flow=0;
 	ipv6->ip6_vfc= 0x60;
@@ -1892,11 +1945,15 @@ int send_fragment(struct iface_data *idata, unsigned int id, unsigned int offset
 		}
 	}
 
+	if(!fsize_f && (forder != LAST_FRAGMENT && forder != ATOMIC_FRAGMENT)){
+		fsize= (fsize>>3) << 3;
+	}
+
 	/* Check that we are able to send the Unfragmentable Part, together with a 
 	   Fragment Header and a chunk data over our link layer
 	 */
 	if( (ptr+sizeof(struct ip6_frag)+fsize) > (v6buffer+idata->mtu)){
-		puts("Unfragmentable part too large for current MTU (1500 bytes)");
+		printf("Unfragmentable part too large for current MTU (%u bytes)\n", idata->mtu);
 		return(-1);
 	}
 
@@ -1949,13 +2006,9 @@ int send_fragment(struct iface_data *idata, unsigned int id, unsigned int offset
 			return(-1);
 		}
 
-		if(!fsize_f && (forder != LAST_FRAGMENT && forder != ATOMIC_FRAGMENT)){
-			fsize= (fsize>>3) << 3;
-		}
-
 		if(fsize < sizeof(struct icmp6_hdr)){
 			if(idata->verbose_f)
-				puts("Fragment size too large to hold an ICMPv6 header");
+				puts("Fragment size too small to hold an ICMPv6 header");
 
 			return(-1);
 		}
@@ -1970,8 +2023,8 @@ int send_fragment(struct iface_data *idata, unsigned int id, unsigned int offset
 		ptr+= sizeof(struct icmp6_hdr);
 		fsize-= sizeof(struct icmp6_hdr);
 
-		if(tstamp_f && fsize >= (sizeof(time_t)+sizeof(u_int32_t))){
-			if((ptr+ (sizeof(time_t) + sizeof(u_int32_t))) > (v6buffer+idata->max_packet_size)){
+		if(tstamp_f && fsize >= (sizeof(time_t)+sizeof(uint32_t))){
+			if((ptr+ (sizeof(time_t) + sizeof(uint32_t))) > (v6buffer+idata->max_packet_size)){
 				puts("Packet too large while inserting timestamp");
 				return(-1);
 			}
@@ -1982,19 +2035,19 @@ int send_fragment(struct iface_data *idata, unsigned int id, unsigned int offset
 			ptr+= sizeof(time_t);
 
 			/* We include a "checksum" such that we can tell the responses we elicit from other packets */
-			*(u_int32_t *)ptr= (u_int32_t)tstamp ^ 0xabcdabcd;
-			ptr+= sizeof(u_int32_t);
+			*(uint32_t *)ptr= (uint32_t)tstamp ^ 0xabcdabcd;
+			ptr+= sizeof(uint32_t);
 			
 
-			if(fsize > (sizeof(time_t)+sizeof(u_int32_t)))
-				fsize-= (sizeof(time_t)+sizeof(u_int32_t));
+			if(fsize > (sizeof(time_t)+sizeof(uint32_t)))
+				fsize-= (sizeof(time_t)+sizeof(uint32_t));
 			else
 				fsize=0;
 		}
 
 		for(i=0; i< (fsize/4); i++){
-			*(u_int32_t *)ptr = random();
-			ptr += sizeof(u_int32_t);
+			*(uint32_t *)ptr = random();
+			ptr += sizeof(uint32_t);
 		}
 
 		ipv6->ip6_plen= htons(ptr-(v6buffer + MIN_IPV6_HLEN));
@@ -2002,7 +2055,7 @@ int send_fragment(struct iface_data *idata, unsigned int id, unsigned int offset
 	}
 	else{
 		if(tstamp_f){
-			if((ptr+ (sizeof(time_t) + sizeof(u_int32_t))) > (v6buffer+idata->max_packet_size)){
+			if((ptr+ (sizeof(time_t) + sizeof(uint32_t))) > (v6buffer+idata->max_packet_size)){
 				puts("Packet too large while inserting timestamp");
 				return(-1);
 			}
@@ -2013,28 +2066,25 @@ int send_fragment(struct iface_data *idata, unsigned int id, unsigned int offset
 			ptr+= sizeof(time_t);
 
 			/* We include a "checksum" such that we can tell the responses we elicit from other packets */
-			*(u_int32_t *)ptr= (u_int32_t)tstamp ^ 0xabcdabcd;
+			*(uint32_t *)ptr= (uint32_t)tstamp ^ 0xabcdabcd;
+			ptr+= sizeof(uint32_t);
 			
 
-			if(fsize > (sizeof(time_t)+sizeof(u_int32_t)))
-				fsize-= (sizeof(time_t)+sizeof(u_int32_t));
+			if(fsize > (sizeof(time_t)+sizeof(uint32_t)))
+				fsize-= (sizeof(time_t)+sizeof(uint32_t));
 			else
 				fsize=0;
 		}
 
 
-		if(!fsize_f && (forder != LAST_FRAGMENT && forder != ATOMIC_FRAGMENT)){
-			fsize= (fsize>>3) << 3;
-		}
-
-		if((ptr+ (sizeof(time_t) + sizeof(u_int32_t))) > (v6buffer+idata->max_packet_size)){
-			puts("Packet too large while inserting timestamp");
+		if((ptr+ fsize) > (v6buffer+idata->max_packet_size)){
+			puts("Packet too large while inserting payload");
 			return(-1);
 		}
 
-		for(i=0; i<(fsize/4); i++){
-			*(u_int32_t *)ptr = random();
-			ptr += sizeof(u_int32_t);
+		for(i=0; i<(fsize/sizeof(uint32_t)); i++){
+			*(uint32_t *)ptr = random();
+			ptr += sizeof(uint32_t);
 		}
 
 		ipv6->ip6_plen= htons(ptr-(v6buffer + MIN_IPV6_HLEN));
@@ -2072,10 +2122,13 @@ int send_fid_probe(struct iface_data *idata){
 	v6buffer = buffer + idata->linkhsize;
 	ipv6 = (struct ip6_hdr *) v6buffer;
 
-	if(idata->type == DLT_EN10MB && idata->flags != IFACE_LOOPBACK){
-		ethernet->src = idata->hsrcaddr;
-		ethernet->dst = idata->hdstaddr;
+	if(idata->type == DLT_EN10MB){
 		ethernet->ether_type = htons(ETHERTYPE_IPV6);
+
+		if(!(idata->flags & IFACE_LOOPBACK)){
+			ethernet->src = idata->hsrcaddr;
+			ethernet->dst = idata->hdstaddr;
+		}
 	}
 	else if(idata->type == DLT_NULL){
 		dlt_null->family= PF_INET6;
@@ -2108,12 +2161,12 @@ int send_fid_probe(struct iface_data *idata){
 	icmp6->icmp6_data16[1]= htons(random());	/* Sequence Number */
 
 	ptr+= sizeof(struct icmp6_hdr);
-	*(u_int32_t *)ptr= icmp6_sig;
-	ptr+= sizeof(u_int32_t);
+	*(uint32_t *)ptr= icmp6_sig;
+	ptr+= sizeof(uint32_t);
 
 	for(i=0;i<400; i++){
-		*(u_int32_t *)ptr= random();
-		ptr+=sizeof(u_int32_t);
+		*(uint32_t *)ptr= random();
+		ptr+=sizeof(uint32_t);
 	}
 
 	icmp6->icmp6_cksum = in_chksum(v6buffer, icmp6, ptr-(unsigned char *)icmp6, IPPROTO_ICMPV6);
@@ -2188,7 +2241,7 @@ int send_fid_probe(struct iface_data *idata){
  * Prints the syntax of the frag6 tool
  */
 void usage(void){
-	puts("usage: frag6 -i INTERFACE -d DST_ADDR [-S LINK_SRC_ADDR] [-D LINK-DST-ADDR]\n"
+	puts("usage: frag6 -d DST_ADDR [-i INTERFACE] [-S LINK_SRC_ADDR] [-D LINK-DST-ADDR]\n"
 	     "       [-s SRC_ADDR[/LEN]] [-A HOP_LIMIT] [-u DST_OPT_HDR_SIZE]\n"
 	     "       [-U DST_OPT_U_HDR_SIZE] [-H HBH_OPT_HDR_SIZE] [-P FRAG_SIZE]\n"
 	     "       [-O FRAG_TYPE] [-o FRAG_OFFSET] [-I FRAG_ID] [-T] [-n]\n"
@@ -2244,7 +2297,7 @@ void print_help(void){
  */
  
 void print_attack_info(struct iface_data *idata){
-	if(idata->type == DLT_EN10MB && idata->flags != IFACE_LOOPBACK){
+	if(idata->type == DLT_EN10MB && !(idata->flags & IFACE_LOOPBACK)){
 		if(ether_ntop(&(idata->hsrcaddr), plinkaddr, sizeof(plinkaddr)) == 0){
 			puts("ether_ntop(): Error converting address");
 			exit(EXIT_FAILURE);
@@ -2264,13 +2317,13 @@ void print_attack_info(struct iface_data *idata){
 		printf("Ethernet Destination Address: %s%s\n", plinkaddr, (!idata->hdstaddr_f)?" (automatically selected)":"");
 	}
 
-	if(inet_ntop(AF_INET6, &(idata->srcaddr), psrcaddr, sizeof(psrcaddr)) == NULL){
-		puts("inet_ntop(): Error converting IPv6 Source Address to presentation format");
-		exit(EXIT_FAILURE);
-	}
+	if(idata->srcaddr_f){
+		if(inet_ntop(AF_INET6, &(idata->srcaddr), psrcaddr, sizeof(psrcaddr)) == NULL){
+			puts("inet_ntop(): Error converting IPv6 Source Address to presentation format");
+			exit(EXIT_FAILURE);
+		}
 
-	if(idata->dstaddr_f){
-		printf("IPv6 Source Address: %s%s\n", psrcaddr, ((!idata->srcaddr_f)?" (automatically selected)":""));
+		printf("IPv6 Source Address: %s%s\n", psrcaddr, ((idata->srcaddr_f != TRUE)?" (automatically selected)":""));
 	}
 
 	if(inet_ntop(AF_INET6, &(idata->dstaddr), pdstaddr, sizeof(pdstaddr)) == NULL){
@@ -2307,7 +2360,7 @@ int valid_icmp6_response(struct iface_data *idata, struct pcap_pkthdr *pkthdr, c
 	struct icmp6_hdr	*pkt_icmp6, *pkt_icmp6_icmp6;
 	struct ip6_frag		*pkt_fh_fh;
 	unsigned char		*pkt_end, *pkt_ptr;
-	u_int8_t			pkt_prev_nh;
+	uint8_t			pkt_prev_nh;
 	unsigned int		minfragsize;
 
 	pkt_ether = (struct ether_header *) pktdata;
@@ -2347,7 +2400,7 @@ int valid_icmp6_response(struct iface_data *idata, struct pcap_pkthdr *pkthdr, c
 
 			if(tstamp_f){
 				pkt_ptr= ((unsigned char *) pkt_icmp6+ sizeof(struct icmp6_hdr));
-				if( *(u_int32_t *) pkt_ptr != (*(u_int32_t *) (pkt_ptr+sizeof(u_int32_t)) ^ 0xabcdabcd)){
+				if( *(uint32_t *) pkt_ptr != (*(uint32_t *) (pkt_ptr+sizeof(uint32_t)) ^ 0xabcdabcd)){
 					return 0;
 				}
 			}
@@ -2361,7 +2414,7 @@ int valid_icmp6_response(struct iface_data *idata, struct pcap_pkthdr *pkthdr, c
 			 */
 			minfragsize= sizeof(struct ip6_hdr) + sizeof(struct icmp6_hdr)+sizeof(struct ip6_hdr) + \
 							sizeof(struct ip6_frag) + sizeof(struct icmp6_hdr) + (fsize_f?fsize:MIN_FRAG_SIZE) + \
-							(tstamp_f?(sizeof(time_t)+sizeof(u_int32_t)):0);
+							(tstamp_f?(sizeof(time_t)+sizeof(uint32_t)):0);
 
 			if( ((pkt_end - (unsigned char *) pkt_ipv6) < minfragsize) &&  \
 										(pkt_end - (unsigned char *) pkt_ipv6) < MIN_IPV6_MTU){
@@ -2413,7 +2466,7 @@ int valid_icmp6_response(struct iface_data *idata, struct pcap_pkthdr *pkthdr, c
 
 				if(tstamp_f){
 					pkt_ptr= ((unsigned char *) pkt_icmp6_icmp6+ sizeof(struct icmp6_hdr));
-					if( *(u_int32_t *) pkt_ptr != (*(u_int32_t *) (pkt_ptr+sizeof(u_int32_t)) ^ 0xabcdabcd)){
+					if( *(uint32_t *) pkt_ptr != (*(uint32_t *) (pkt_ptr+sizeof(uint32_t)) ^ 0xabcdabcd)){
 						return 0;
 					}
 				}
@@ -2471,7 +2524,7 @@ int valid_icmp6_response2(struct iface_data *idata, struct pcap_pkthdr *pkthdr, 
 	struct icmp6_hdr	*pkt_icmp6, *pkt_icmp6_icmp6;
 	struct ip6_frag		*pkt_fh_fh;
 	unsigned char		*pkt_end;
-	u_int8_t			pkt_prev_nh;
+	uint8_t			pkt_prev_nh;
 
 	pkt_ether = (struct ether_header *) pktdata;
 	pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata->linkhsize);
@@ -2623,8 +2676,8 @@ int test_frag_pattern(unsigned char *ptr, unsigned int size, char *block){
  *
  * Identifies and prints the Fragment Identification generation policy
 */
-int predict_frag_id(u_int32_t *s1, unsigned int n1, u_int32_t *s2, unsigned int n2){
-	u_int32_t		diff1_avg, diff2_avg;
+int predict_frag_id(uint32_t *s1, unsigned int n1, uint32_t *s2, unsigned int n2){
+	uint32_t		diff1_avg, diff2_avg;
 	double			diff1_sdev, diff2_sdev;
 
 	if(inc_sdev(s1, n1, &diff1_avg, &diff1_sdev) == -1){
