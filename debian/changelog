@@ -1,3 +1,15 @@
+ipv6toolkit (2.0~beta-1) unstable; urgency=low
+
+  * New upstream release.
+  * Depend on ieee-data instead of shipping oui.txt. Closes: #739202.
+  * Make install should not attempt to install oui.txt anymore
+  * debian/rules: 'make' requires data/ to exist
+  * Revert "debian/watch: switch to Github releases by fgont"
+  * Allow beyond-numeric-versioned tarballs (like betas) in debian/watch
+  * Mangle pre-release versions (like betas) in debian/watch
+
+ -- Octavio Alvarez <alvarezp@alvarezp.ods.org>  Wed, 29 Oct 2014 22:09:44 -0700
+
 ipv6toolkit (1.5.2-1) unstable; urgency=low
 
   * Added debian/gbp.conf
