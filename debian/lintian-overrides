@@ -1,3 +1,7 @@
 # Overriding manpage-has-errors-from-man for manuals/scan6.1
 # because the paragraph has one long URL.
 ipv6toolkit binary: manpage-has-errors-from-man usr/share/man/man1/scan6.1.gz 487: warning [p 10, 6.8i]: cannot adjust line
+
+# Overriding manpage-has-errors-from-man for manuals/path6.1
+# because the paragraph has one long URL.
+ipv6toolkit binary: manpage-has-errors-from-man usr/share/man/man1/path6.1.gz 490: warning [p 10, 6.3i]: cannot adjust line
