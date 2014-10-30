@@ -1,7 +1,7 @@
 /*
  * addr6: A tool to decode IPv6 addresses
  *
- * Copyright (C) 2013 Fernando Gont (fgont@si6networks.com)
+ * Copyright (C) 2013-2014 Fernando Gont (fgont@si6networks.com)
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,10 +17,7 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * 
- * Build with: gcc addr6.c -Wall -o addr6
- * 
- * This program has been tested to compile and run on: Debian GNU/Linux 6.0,
- * FreeBSD 9.0, NetBSD 5.1, OpenBSD 5.0, and Ubuntu 11.10.
+ * Build with: make addr6
  *
  * It requires that the libpcap library be installed on your system.
  *
@@ -32,50 +29,40 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <getopt.h>
-#include <unistd.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/param.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <sys/resource.h>
 #include <sys/socket.h>
-#include <pwd.h>
 #include "addr6.h"
 #include "ipv6toolkit.h"
+#include "libipv6.h"
 
 void					usage(void);
 void					print_help(void);
-int						read_prefix(char *, unsigned int, char **);
-size_t					Strnlen(const char *, size_t);
-unsigned int			is_service_port(u_int16_t);
-unsigned int			zero_byte_iid(struct in6_addr *);
-void					decode_ipv6_address(struct decode6 *, struct stats6 *);
 void					stat_ipv6_address(struct decode6 *, struct stats6 *);
 void					print_dec_address_script(struct decode6 *);
-int						init_host_list(struct host_list *);
-u_int16_t				key(struct host_list *, struct in6_addr *);
-struct host_entry *		add_host_entry(struct host_list *, struct in6_addr *);
-unsigned int			is_ip6_in_list(struct host_list *, struct in6_addr *);
-int 					is_eq_in6_addr(struct in6_addr *, struct in6_addr *);
-unsigned int			match_ipv6(struct in6_addr *, u_int8_t *, unsigned int, struct in6_addr *);
-void					sanitize_ipv6_prefix(struct in6_addr *, u_int8_t);
+int						init_host_list(struct hashed_host_list *);
+uint16_t				key(struct hashed_host_list *, struct in6_addr *);
+struct hashed_host_entry *		add_hashed_host_entry(struct hashed_host_list *, struct in6_addr *);
+unsigned int			is_ip6_in_hashed_list(struct hashed_host_list *, struct in6_addr *);
 void					print_stats(struct stats6 *);
 
-unsigned char			stdin_f=0, addr_f=0, verbose_f=0, decode_f=0, print_unique_f=0, stats_f=0, filter_f=0;
+unsigned char			stdin_f=FALSE, addr_f=FALSE, verbose_f=FALSE, decode_f=FALSE, print_unique_f=FALSE;
+unsigned char			stats_f=FALSE, filter_f=FALSE, canonic_f=FALSE, reverse_f=FALSE;
 char					line[MAX_LINE_SIZE];
 
+extern char			*optarg;
+extern int			optind, opterr, optopt;	
+
 int main(int argc, char **argv){
-	extern char			*optarg;	
 	struct decode6		addr;
 	struct stats6		stats;
-	struct host_list	hlist;
+	struct hashed_host_list	hlist;
 	int					r;
 	char				*ptr, *pref, *charptr, *lasts;
 	char				pv6addr[INET6_ADDRSTRLEN];
-	uid_t				ruid;
-	gid_t				rgid;
-	struct passwd		*pwdptr;
 	unsigned int		accept_type=0, block_type=0, accept_scope=0, block_scope=0, accept_itype=0, block_itype=0;
 	unsigned int		accept_utype=0, block_utype=0;
 
@@ -83,18 +70,20 @@ int main(int argc, char **argv){
 
 	/* Block Filters */
 	struct in6_addr 	block[MAX_BLOCK];
-	u_int8_t			blocklen[MAX_BLOCK];
+	uint8_t			blocklen[MAX_BLOCK];
 	unsigned int		nblock=0;
 
 	/* Accept Filters */
 	struct in6_addr		accept[MAX_ACCEPT];
-	u_int8_t			acceptlen[MAX_ACCEPT];
+	uint8_t			acceptlen[MAX_ACCEPT];
 	unsigned int		naccept=0;
 
 	static struct option longopts[] = {
 		{"address", required_argument, 0, 'a'},
 		{"stdin", no_argument, 0, 'i'},
+		{"print-canonic", no_argument, 0, 'c'},
 		{"print-decode", no_argument, 0, 'd'},
+		{"print-reverse", no_argument, 0, 'r'},
 		{"print-stats", no_argument, 0, 's'},
 		{"print-unique", no_argument, 0, 'q'},
 		{"accept", required_argument, 0, 'j'},
@@ -108,10 +97,11 @@ int main(int argc, char **argv){
 		{"block-utype", required_argument, 0, 'W'},
 		{"block-iid", required_argument, 0, 'G'},
 		{"verbose", no_argument, 0, 'v'},
-		{"help", no_argument, 0, 'h'}
+		{"help", no_argument, 0, 'h'},
+		{0, 0, 0,  0 },
 	};
 
-	char shortopts[]= "a:idsqj:b:k:w:g:J:B:K:W:G:vh";
+	char shortopts[]= "a:icrdsqj:b:k:w:g:J:B:K:W:G:vh";
 
 	char option;
 
@@ -120,44 +110,12 @@ int main(int argc, char **argv){
 		exit(EXIT_FAILURE);
 	}
 
-	/* 
-	   addr6 does not need superuser privileges. But since most of the other tools in the toolkit do,
-	   the user might unnecessarily run it as such. We release any unnecessary privileges before proceeding
-	   further.
+	release_privileges();
 
-	   If the real UID is not root, we setuid() and setgid() to that user and group, releasing superuser
-	   privileges. Otherwise, if the real UID is 0, we try to setuid() to "nobody", releasing superuser 
-	   privileges.
-	 */
-	if( (ruid=getuid()) && (rgid=getgid())){
-		if(setgid(rgid) == -1){
-			puts("Error while releasing superuser privileges (changing to real GID)");
-			exit(EXIT_FAILURE);
-		}
-
-		if(setuid(ruid) == -1){
-			puts("Error while releasing superuser privileges (changing to real UID)");
-			exit(EXIT_FAILURE);
-		}
-	}
-	else{
-		if((pwdptr=getpwnam("nobody"))){
-			if(pwdptr->pw_uid && (setgid(pwdptr->pw_gid) == -1)){
-				puts("Error while releasing superuser privileges (changing to nobody's group)");
-				exit(EXIT_FAILURE);
-			}
-
-			if(pwdptr->pw_uid && (setuid(pwdptr->pw_uid) == -1)){
-				puts("Error while releasing superuser privileges (changing to 'nobody')");
-				exit(EXIT_FAILURE);
-			}
-		}
-	}
-
-	while((r=getopt_long(argc, argv, shortopts, longopts, NULL)) != -1) {
+	while((r=getopt_long(argc, argv, shortopts, longopts, NULL)) != -1 && r != '?') {
 		option= r;
 
-		switch(option) {
+		switch(option){
 			case 'a':
 				if( inet_pton(AF_INET6, optarg, &(addr.ip6)) <= 0){
 					puts("inet_pton(): address not valid");
@@ -170,11 +128,18 @@ int main(int argc, char **argv){
 			case 'i':  /* Read from stdin */
 				stdin_f=1;
 				break;
-	    
+
+			case 'c':	/* Print addresses in canonic form */
+				canonic_f=1;
+				break;
+
 			case 'd':	/* Decode IPv6 addresses */
 				decode_f=1;
 				break;
 
+			case 'r':	/* Print addresses in reversed form */
+				reverse_f=1;
+				break;
 
 			case 'j':	/* IPv6 Address (accept) filter */
 				if(naccept > MAX_ACCEPT){
@@ -286,28 +251,28 @@ int main(int argc, char **argv){
 					accept_scope |= SCOPE_RESERVED;
 				}
 				else if(strncmp(optarg, "interface", MAX_TYPE_SIZE) == 0 || strncmp(optarg, "interface-local", MAX_TYPE_SIZE) == 0){
-					accept_type |= SCOPE_INTERFACE;
+					accept_scope |= SCOPE_INTERFACE;
 				}
 				else if(strncmp(optarg, "link", MAX_TYPE_SIZE) == 0 || strncmp(optarg, "link-local", MAX_TYPE_SIZE) == 0){
-					accept_type |= SCOPE_LINK;
+					accept_scope |= SCOPE_LINK;
 				}
 				else if(strncmp(optarg, "admin", MAX_TYPE_SIZE) == 0 || strncmp(optarg, "admin-local", MAX_TYPE_SIZE) == 0){
-					accept_type |= SCOPE_ADMIN;
+					accept_scope |= SCOPE_ADMIN;
 				}
 				else if(strncmp(optarg, "site", MAX_TYPE_SIZE) == 0 || strncmp(optarg, "site-local", MAX_TYPE_SIZE) == 0){
-					accept_type |= SCOPE_SITE;
+					accept_scope |= SCOPE_SITE;
 				}
 				else if(strncmp(optarg, "organization", MAX_TYPE_SIZE) == 0 || strncmp(optarg, "organization-local", MAX_TYPE_SIZE) == 0){
-					accept_type |= SCOPE_ORGANIZATION;
+					accept_scope |= SCOPE_ORGANIZATION;
 				}
 				else if(strncmp(optarg, "global", MAX_TYPE_SIZE) == 0){
-					accept_type |= SCOPE_GLOBAL;
+					accept_scope |= SCOPE_GLOBAL;
 				}
 				else if(strncmp(optarg, "unassigned", MAX_TYPE_SIZE) == 0){
-					accept_type |= SCOPE_UNASSIGNED;
+					accept_scope |= SCOPE_UNASSIGNED;
 				}
 				else if(strncmp(optarg, "unspecified", MAX_TYPE_SIZE) == 0){
-					accept_type |= SCOPE_UNSPECIFIED;
+					accept_scope |= SCOPE_UNSPECIFIED;
 				}
 				else{
 					printf("Unknown address scope '%s' in accept scope filter\n", optarg);
@@ -323,28 +288,28 @@ int main(int argc, char **argv){
 					block_scope |= SCOPE_RESERVED;
 				}
 				else if(strncmp(optarg, "interface", MAX_TYPE_SIZE) == 0 || strncmp(optarg, "interface-local", MAX_TYPE_SIZE) == 0){
-					block_type |= SCOPE_INTERFACE;
+					block_scope |= SCOPE_INTERFACE;
 				}
 				else if(strncmp(optarg, "link", MAX_TYPE_SIZE) == 0 || strncmp(optarg, "link-local", MAX_TYPE_SIZE) == 0){
-					block_type |= SCOPE_LINK;
+					block_scope |= SCOPE_LINK;
 				}
 				else if(strncmp(optarg, "admin", MAX_TYPE_SIZE) == 0 || strncmp(optarg, "admin-local", MAX_TYPE_SIZE) == 0){
-					block_type |= SCOPE_ADMIN;
+					block_scope |= SCOPE_ADMIN;
 				}
 				else if(strncmp(optarg, "site", MAX_TYPE_SIZE) == 0 || strncmp(optarg, "site-local", MAX_TYPE_SIZE) == 0){
-					block_type |= SCOPE_SITE;
+					block_scope |= SCOPE_SITE;
 				}
 				else if(strncmp(optarg, "organization", MAX_TYPE_SIZE) == 0 || strncmp(optarg, "organization-local", MAX_TYPE_SIZE) == 0){
-					block_type |= SCOPE_ORGANIZATION;
+					block_scope |= SCOPE_ORGANIZATION;
 				}
 				else if(strncmp(optarg, "global", MAX_TYPE_SIZE) == 0){
-					block_type |= SCOPE_GLOBAL;
+					block_scope |= SCOPE_GLOBAL;
 				}
 				else if(strncmp(optarg, "unassigned", MAX_TYPE_SIZE) == 0){
-					block_type |= SCOPE_UNASSIGNED;
+					block_scope |= SCOPE_UNASSIGNED;
 				}
 				else if(strncmp(optarg, "unspecified", MAX_TYPE_SIZE) == 0){
-					block_type |= SCOPE_UNSPECIFIED;
+					block_scope |= SCOPE_UNSPECIFIED;
 				}
 				else{
 					printf("Unknown address scope '%s' in block scope filter\n", optarg);
@@ -559,7 +524,7 @@ int main(int argc, char **argv){
 	}
 
 	/* By default, addr6 decodes IPv6 addresses */
-	if(!print_unique_f && !filter_f && !stats_f)
+	if(!print_unique_f && !filter_f && !stats_f && !canonic_f && !reverse_f)
 		decode_f=1;
 
 	if(print_unique_f){
@@ -586,7 +551,7 @@ int main(int argc, char **argv){
 				}
 
 				if(filter_f || decode_f || stats_f)
-					decode_ipv6_address(&addr, &stats);
+					decode_ipv6_address(&addr);
 
 
 				if(nblock){
@@ -618,11 +583,11 @@ int main(int argc, char **argv){
 					continue;
 
 				if(print_unique_f){
-					if(is_ip6_in_list(&hlist, &(addr.ip6))){
+					if(is_ip6_in_hashed_list(&hlist, &(addr.ip6))){
 						continue;
 					}
 					else{
-						if(add_host_entry(&hlist, &(addr.ip6)) == NULL){
+						if(add_hashed_host_entry(&hlist, &(addr.ip6)) == NULL){
 							puts("Not enough memory (or hit internal artificial limit) when storing IPv6 address in memory");
 							exit(EXIT_FAILURE);
 						}
@@ -634,6 +599,9 @@ int main(int argc, char **argv){
 				}
 				else if(decode_f){
 						print_dec_address_script(&addr);
+				}
+				else if(reverse_f){
+						print_ipv6_address_rev(&(addr.ip6));
 				}
 				else{
 					if(inet_ntop(AF_INET6, &(addr.ip6), pv6addr, sizeof(pv6addr)) == NULL){
@@ -653,273 +621,22 @@ int main(int argc, char **argv){
 	else{
 		/* If we were not asked to decode the address, we should print it on stdout */
 		if(decode_f){
-			decode_ipv6_address(&addr, &stats);
+			decode_ipv6_address(&addr);
 			print_dec_address_script(&addr);
+		}
+		else if(canonic_f){
+			if(print_ipv6_address("", &(addr.ip6)) != EXIT_SUCCESS)
+				exit(EXIT_FAILURE);
+		}
+		else if(reverse_f){
+			if(print_ipv6_address_rev(&(addr.ip6)) != EXIT_SUCCESS)
+				exit(EXIT_FAILURE);
 		}
 	}
 
 	exit(EXIT_SUCCESS);
 }
 
-
-/*
- * Function: read_prefix()
- *
- * Obtain a pointer to the beginning of non-blank text, and zero-terminate that text upon space or comment.
- */
-
-int read_prefix(char *line, unsigned int len, char **start){
-	char *end;
-
-	*start=line;
-
-	while( (*start < (line + len)) && (**start==' ' || **start=='\t' || **start=='\r' || **start=='\n')){
-		(*start)++;
-	}
-
-	if( *start == (line + len))
-		return(0);
-
-	if( **start == '#')
-		return(0);
-
-	end= *start;
-
-	while( (end < (line + len)) && !(*end==' ' || *end=='\t' || *end=='#' || *end=='\r' || *end=='\n'))
-		end++;
-
-	*end=0;
-	return(1);
-}
-
-
-/*
- * Function: is_service_port()
- *
- * Check whether a short int is in the list of service ports (in hexadecmal or decimal "notations")
- */
-
-unsigned int is_service_port(u_int16_t port){
-	unsigned int 	i;
-	u_int16_t		service_ports_hex[]={0x21, 0x22, 0x23, 0x25, 0x49, 0x53, 0x80, 0x110, 0x123, 0x179, 0x220, 0x389, \
-						                 0x443, 0x547, 0x993, 0x995, 0x1194, 0x3306, 0x5060, 0x5061, 0x5432, 0x6446, 0x8080};
-	u_int16_t		service_ports_dec[]={21, 22, 23, 25, 49, 53, 80, 110, 123, 179, 220, 389, \
-						                 443, 547, 993, 995, 1194, 3306, 5060, 5061, 5432, 6446, 8080};
-
-	
-	for(i=0; i< (sizeof(service_ports_hex)/sizeof(u_int16_t)); i++){
-		if(port == service_ports_hex[i])
-			return(1);
-	}
-
-	for(i=0; i< (sizeof(service_ports_hex)/sizeof(u_int16_t)); i++){
-		if(port == service_ports_dec[i])
-			return(1);
-	}
-
-	return(0);
-}
-
-/*
- * Function: zero_byte_iid()
- *
- * Counts the number of zero-bytes in an IPv6 Interface ID
- */
-
-unsigned int zero_byte_iid(struct in6_addr *ipv6){
-	unsigned int i, nonzero=0;
-
-	for(i=8; i<=15; i++){
-		if(ipv6->s6_addr[i] == 0)
-			nonzero++;
-	}
-
-	return(nonzero);
-}
-
-
-/*
- * Function: decode_ipv6_address()
- *
- * Decodes/analyzes an IPv6 address
- */
-
-void decode_ipv6_address(struct decode6 *addr, struct stats6 *stats){
-	u_int16_t	scope;
-
-	if(IN6_IS_ADDR_UNSPECIFIED(&(addr->ip6))){
-		addr->type= IPV6_UNSPEC;
-		addr->subtype= IPV6_UNSPEC;
-		addr->scope= SCOPE_UNSPECIFIED;
-	}
-	else if(IN6_IS_ADDR_MULTICAST(&(addr->ip6))){
-		addr->type= IPV6_MULTICAST;
-		addr->iidtype= IID_UNSPECIFIED;
-		addr->iidsubtype= IID_UNSPECIFIED;
-
-		if((addr->ip6.s6_addr16[0] & htons(0xff00)) == htons(0xff00)){
-			if((addr->ip6.s6_addr16[0] & htons(0xfff0)) == htons(0xff00)){
-				addr->subtype= MCAST_PERMANENT;
-			}
-			else if((addr->ip6.s6_addr16[0] & htons(0xfff0)) == htons(0xff10)){
-				addr->subtype= MCAST_NONPERMANENT;
-			}
-			else if((addr->ip6.s6_addr16[0] & htons(0xfff0)) == htons(0xff20)){
-				addr->subtype= MCAST_INVALID;
-			}
-			else if((addr->ip6.s6_addr16[0] & htons(0xfff0)) == htons(0xff30)){
-				addr->subtype= MCAST_UNICASTBASED;
-			}
-			else if((addr->ip6.s6_addr16[0] & htons(0xfff0)) == htons(0xff40)){
-				addr->subtype= MCAST_INVALID;
-			}
-			else if((addr->ip6.s6_addr16[0] & htons(0xfff0)) == htons(0xff50)){
-				addr->subtype= MCAST_INVALID;
-			}
-			else if((addr->ip6.s6_addr16[0] & htons(0xfff0)) == htons(0xff60)){
-				addr->subtype= MCAST_INVALID;
-			}
-			else if((addr->ip6.s6_addr16[0] & htons(0xfff0)) == htons(0xff70)){
-				addr->subtype= MCAST_EMBEDRP;
-			}
-
-			scope= htons(addr->ip6.s6_addr16[0]) & 0x000f;
-
-			switch(scope){
-				case 0:
-					addr->scope= SCOPE_RESERVED;
-					break;
-
-				case 1:
-					addr->scope= SCOPE_INTERFACE;
-					break;
-
-				case 2:
-					addr->scope= SCOPE_LINK;
-					break;
-
-				case 3:
-					addr->scope= SCOPE_RESERVED;
-					break;
-
-				case 4:
-					addr->scope= SCOPE_ADMIN;
-					break;
-
-				case 5:
-					addr->scope= SCOPE_SITE;
-					break;
-
-				case 8:
-					addr->scope= SCOPE_ORGANIZATION;
-					break;
-
-				case 0Xe:
-					addr->scope= SCOPE_GLOBAL;
-					break;
-
-				default:
-					addr->scope= SCOPE_UNASSIGNED;
-					break;
-			}
-		}
-		else{
-			addr->subtype= MCAST_UNKNOWN;
-		}
-	}
-	else{
-		addr->type= IPV6_UNICAST;
-		addr->iidtype= IID_UNSPECIFIED;
-		addr->iidsubtype= IID_UNSPECIFIED;
-
-		if(IN6_IS_ADDR_LOOPBACK(&(addr->ip6))){
-			addr->subtype= UCAST_LOOPBACK;
-			addr->scope= SCOPE_INTERFACE;
-		}
-		else if(IN6_IS_ADDR_V4MAPPED(&(addr->ip6))){
-			addr->subtype= UCAST_V4MAPPED;
-			addr->scope= SCOPE_UNSPECIFIED;
-		}
-		else if(IN6_IS_ADDR_V4COMPAT(&(addr->ip6))){
-			addr->subtype= UCAST_V4COMPAT;
-			addr->scope= SCOPE_UNSPECIFIED;
-		}
-		else if(IN6_IS_ADDR_LINKLOCAL(&(addr->ip6))){
-			addr->subtype= UCAST_LINKLOCAL;
-			addr->scope= SCOPE_LINK;
-		}
-		else if(IN6_IS_ADDR_SITELOCAL(&(addr->ip6))){
-			addr->subtype= UCAST_SITELOCAL;
-			addr->scope= SCOPE_SITE;
-		}
-		else if(IN6_IS_ADDR_UNIQUELOCAL(&(addr->ip6))){
-			addr->subtype= UCAST_UNIQUELOCAL;
-			addr->scope= SCOPE_GLOBAL;
-		}
-		else if(IN6_IS_ADDR_6TO4(&(addr->ip6))){
-			addr->subtype= UCAST_6TO4;
-			addr->scope= SCOPE_GLOBAL;
-		}
-		else if(IN6_IS_ADDR_TEREDO(&(addr->ip6)) || IN6_IS_ADDR_TEREDO_LEGACY(&(addr->ip6))){
-			addr->subtype= UCAST_TEREDO;
-			addr->scope= SCOPE_GLOBAL;
-
-			/* If the U or G bytes are set, the IID type is unknown */
-			if(ntohs(addr->ip6.s6_addr16[4]) & 0x0300){
-				addr->iidtype= IID_TEREDO_UNKNOWN;
-			}
-			else if(ntohs(addr->ip6.s6_addr16[4]) & 0x3cff){
-				addr->iidtype= IID_TEREDO_RFC5991;
-			}
-			else{
-				addr->iidtype= IID_TEREDO_RFC4380;
-			}
-		}
-		else{
-			addr->subtype= UCAST_GLOBAL;
-			addr->scope= SCOPE_GLOBAL;
-		}
-
-		if(addr->subtype==UCAST_GLOBAL || addr->subtype==UCAST_V4MAPPED || addr->subtype==UCAST_V4COMPAT || \
-			addr->subtype==UCAST_LINKLOCAL || addr->subtype==UCAST_SITELOCAL || addr->subtype==UCAST_UNIQUELOCAL ||\
-			addr->subtype == UCAST_6TO4){
-
-			if( (addr->ip6.s6_addr32[2] & htonl(0x020000ff)) == htonl(0x020000ff) && 
-				(addr->ip6.s6_addr32[3] & htonl(0xff000000)) == htonl(0xfe000000)){
-				addr->iidtype= IID_MACDERIVED;
-				addr->iidsubtype= (ntohl(addr->ip6.s6_addr32[2]) >> 8) & 0xfffdffff;
-			}
-			else if((addr->ip6.s6_addr32[2] & htonl(0xfdffffff)) == htonl(0x00005efe)){
-				/* We assume the u bit can be o o 1, but the i/g bit must be 0 */
-				addr->iidtype= IID_ISATAP;
-			}
-			else if(addr->ip6.s6_addr32[2] == 0 && (addr->ip6.s6_addr16[6] & htons(0xff00)) != 0 && addr->ip6.s6_addr16[7] != 0){
-				addr->iidtype= IID_EMBEDDEDIPV4;
-			}
-			else if(addr->ip6.s6_addr32[2] == 0 && \
-			          ((addr->ip6.s6_addr16[6] & htons(0xff00)) == 0 && is_service_port(ntohs(addr->ip6.s6_addr16[7])))){
-				addr->iidtype= IID_EMBEDDEDPORT;
-			}
-			else if(addr->ip6.s6_addr32[2] == 0 && \
-			        	         ((addr->ip6.s6_addr16[7] & htons(0xff00)) == 0 && is_service_port(ntohs(addr->ip6.s6_addr16[6])))){
-				addr->iidtype= IID_EMBEDDEDPORTREV;
-			}
-			else if(addr->ip6.s6_addr32[2] == 0 && (addr->ip6.s6_addr16[6] & htons(0xff00)) == 0 && addr->ip6.s6_addr16[7] != 0){
-				addr->iidtype= IID_LOWBYTE;
-			}
-			else if( ntohs(addr->ip6.s6_addr16[4]) <= 0x255 && ntohs(addr->ip6.s6_addr16[5]) <= 0x255 && \
-					ntohs(addr->ip6.s6_addr16[6]) <= 0x255 && ntohs(addr->ip6.s6_addr16[7]) <= 0x255){
-				addr->iidtype= IID_EMBEDDEDIPV4_64;
-			}
-			else if( zero_byte_iid(&(addr->ip6)) > 2 ){
-				addr->iidtype= IID_PATTERN_BYTES;
-			}
-			else{
-				addr->iidtype= IID_RANDOM;
-			}
-		}
-	}
-}
 
 
 /*
@@ -1059,7 +776,15 @@ void stat_ipv6_address(struct decode6 *addr, struct stats6 *stats){
 						break;
 
 					case IID_EMBEDDEDIPV4:
-						(stats->iidmbeddedipv4)++;
+						switch(addr->iidsubtype){
+							case IID_EMBEDDEDIPV4_32:
+								(stats->iidembeddedipv4_32)++;
+								break;
+
+							case IID_EMBEDDEDIPV4_64:
+								(stats->iidembeddedipv4_64)++;
+								break;
+						}
 						break;
 
 					case IID_EMBEDDEDPORT:
@@ -1072,10 +797,6 @@ void stat_ipv6_address(struct decode6 *addr, struct stats6 *stats){
 
 					case IID_LOWBYTE:
 						(stats->iidlowbyte)++;
-						break;
-
-					case IID_EMBEDDEDIPV4_64:
-						(stats->iidembeddedipv4_64)++;
 						break;
 
 					case IID_PATTERN_BYTES:
@@ -1134,6 +855,7 @@ void print_dec_address_script(struct decode6 *addr){
 	char *iidembeddedport="embedded-port";
 	char *iidembeddedportrev="embedded-port-rev";
 	char *iidlowbyte="low-byte";
+	char *iidembeddedipv4_32="embedded-ipv4-32";
 	char *iidembeddedipv4_64="embedded-ipv4-64";
 	char *iidpatternbytes="pattern-bytes";
 	char *iidrandom="randomized";
@@ -1234,6 +956,16 @@ void print_dec_address_script(struct decode6 *addr){
 
 					case IID_EMBEDDEDIPV4:
 						iidtype= iidmbeddedipv4;
+						switch(addr->iidsubtype){
+							case IID_EMBEDDEDIPV4_32:
+								iidsubtype= iidembeddedipv4_32;
+								break;
+
+							case IID_EMBEDDEDIPV4_64:
+								iidsubtype= iidembeddedipv4_64;
+								break;
+						}
+
 						break;
 
 					case IID_EMBEDDEDPORT:
@@ -1354,11 +1086,11 @@ void print_dec_address_script(struct decode6 *addr){
 /*
  * Function: usage()
  *
- * Prints the syntax of the scan6 tool
+ * Prints the syntax of the addr6 tool
  */
 
 void usage(void){
-	puts("usage: addr6 (-i | -a) [-d | -s | -q] [-v] [-h]");
+	puts("usage: addr6 (-i | -a) [-c | -d | -r | -s | -q] [-v] [-h]");
 }
 
 
@@ -1370,12 +1102,14 @@ void usage(void){
 
 void print_help(void){
 	puts(SI6_TOOLKIT);
-	puts( "addr6: An IPv6 address analysis tool\n");
+	puts( "addr6: An IPv6 address analysis and conversion tool\n");
 	usage();
     
 	puts("\nOPTIONS:\n"
 	     "  --address, -a             IPv6 address to be decoded\n"
 	     "  --stdin, -i               Read IPv6 addresses from stdin (standard input)\n"
+	     "  --print-canonic, -c       Print IPv6 addresses in canonic form\n"
+	     "  --print-reverse, -r       Print reversed IPv6 address\n"
 	     "  --print-decode, -d        Decode IPv6 addresses\n"
 	     "  --print-stats, -s         Print statistics about IPv6 addresses\n"
 	     "  --print-unique, -q        Discard duplicate IPv6 addresses\n"
@@ -1398,24 +1132,6 @@ void print_help(void){
 }
 
 
-/*
- * Function: Strnlen()
- *
- * Our own version of strnlen(), since some OSes do not support it.
- */
-
-size_t Strnlen(const char *s, size_t maxlen){
-	size_t i=0;
-
-	while(s[i] != 0 && i < maxlen)
-		i++;
-
-	if(i < maxlen)
-		return(i);
-	else
-		return(maxlen);
-}
-
 
 /*
  * Function: init_host_list()
@@ -1423,12 +1139,12 @@ size_t Strnlen(const char *s, size_t maxlen){
  * Initilizes a host_list structure
  */
 
-int init_host_list(struct host_list *hlist){
+int init_host_list(struct hashed_host_list *hlist){
 	unsigned int i;
 
-	bzero(hlist, sizeof(struct host_list));
+	memset(hlist, 0, sizeof(struct hashed_host_list));
 
-	if( (hlist->host = malloc(MAX_LIST_ENTRIES * sizeof(struct host_entry *))) == NULL){
+	if( (hlist->host = malloc(MAX_LIST_ENTRIES * sizeof(struct hashed_host_entry *))) == NULL){
 		return(0);
 	}
 
@@ -1446,24 +1162,24 @@ int init_host_list(struct host_list *hlist){
 /*
  * Function: key()
  *
- * Compute a key for accessing the hash-table of a host_list structure
+ * Compute a key for accessing the hash-table of a hashed_host_list structure
  */
 
-u_int16_t key(struct host_list *hlist, struct in6_addr *ipv6){
-		return( ((hlist->key_l ^ ipv6->s6_addr16[0] ^ ipv6->s6_addr16[7]) \
-				^ (hlist->key_h ^ ipv6->s6_addr16[1] ^ ipv6->s6_addr16[6])) % MAX_LIST_ENTRIES);
+uint16_t key(struct hashed_host_list *hlist, struct in6_addr *ipv6){
+		return( ((hlist->key_l ^ (uint16_t)(ntohl(ipv6->s6_addr32[0]) >> 16) ^ (uint16_t)(ntohl(ipv6->s6_addr32[3]) & 0x0000ffff)) \
+				^ (hlist->key_h ^ (uint16_t)(ntohl(ipv6->s6_addr32[0]) >> 16) ^ (uint16_t)(ipv6->s6_addr32[3] >> 16))) % MAX_LIST_ENTRIES);
 }
 
 
 /*
- * Function: add_host_entry()
+ * Function: add_hashed_host_entry()
  *
- * Add a host_entry structure to the hash table
+ * Add a hashed_host_entry structure to the hash table
  */
 
-struct host_entry *add_host_entry(struct host_list *hlist, struct in6_addr *ipv6){
-	struct host_entry	*hentry, *ptr;
-	u_int16_t			hkey;
+struct hashed_host_entry *add_hashed_host_entry(struct hashed_host_list *hlist, struct in6_addr *ipv6){
+	struct hashed_host_entry	*hentry, *ptr;
+	uint16_t			hkey;
 
 	hkey= key(hlist, ipv6);
 
@@ -1471,11 +1187,11 @@ struct host_entry *add_host_entry(struct host_list *hlist, struct in6_addr *ipv6
 		return(NULL);
 	}
 
-	if( (hentry= malloc(sizeof(struct host_entry))) == NULL){
+	if( (hentry= malloc(sizeof(struct hashed_host_entry))) == NULL){
 		return(NULL);
 	}
 
-	bzero(hentry, sizeof(struct host_entry));
+	memset(hentry, 0, sizeof(struct hashed_host_entry));
 	hentry->ip6 = *ipv6;
 	hentry->next= NULL;
 
@@ -1499,14 +1215,14 @@ struct host_entry *add_host_entry(struct host_list *hlist, struct in6_addr *ipv6
 
 
 /*
- * Function: is_ip6_in_list()
+ * Function: is_ip6_in_hashed_list()
  *
  * Checks whether an IPv6 address is present in a host list.
  */
 
-unsigned int is_ip6_in_list(struct host_list *hlist, struct in6_addr *target){
-	u_int16_t			ckey;
-	struct host_entry	*chentry;
+unsigned int is_ip6_in_hashed_list(struct hashed_host_list *hlist, struct in6_addr *target){
+	uint16_t			ckey;
+	struct hashed_host_entry	*chentry;
 
 	ckey= key(hlist, target);
 
@@ -1515,23 +1231,6 @@ unsigned int is_ip6_in_list(struct host_list *hlist, struct in6_addr *target){
 			return 1;
 
 	return 0; 
-}
-
-
-/*
- * Function: is_eq_in6_addr()
- *
- * Compares two IPv6 addresses. Returns 1 if they are equal.
- */
-
-int is_eq_in6_addr(struct in6_addr *ip1, struct in6_addr *ip2){
-	unsigned int i;
-
-	for(i=0; i<8; i++)
-		if(ip1->s6_addr16[i] != ip2->s6_addr16[i])
-			return 0;
-
-	return 1;
 }
 
 
@@ -1631,60 +1330,5 @@ void print_stats(struct stats6 *stats){
 
 		printf("Randomized: %7u (%.2f%%)\n\n", stats->iidrandom, ((float)(stats->iidrandom)/totaliids) * 100);
 	}
-}
-
-
-
-/*
- * Function match_ipv6()
- *
- * Finds if an IPv6 address matches a prefix in a list of prefixes.
- */
-
-unsigned int match_ipv6(struct in6_addr *prefixlist, u_int8_t *prefixlen, unsigned int nprefix, 
-								struct in6_addr *ipv6addr){
-
-    unsigned int 	i, j;
-    struct in6_addr	dummyipv6;
-    
-    for(i=0; i<nprefix; i++){
-	dummyipv6 = *ipv6addr;
-	sanitize_ipv6_prefix(&dummyipv6, prefixlen[i]);
-	
-	for(j=0; j<4; j++)
-	    if(dummyipv6.s6_addr32[j] != prefixlist[i].s6_addr32[j])
-		break;
-    
-	if(j==4)
-	    return 1;
-    }
-
-    return 0;
-}
-
-
-/*
- * sanitize_ipv6_prefix()
- *
- * Clears those bits in an IPv6 address that are not within a prefix length.
- */
-
-void sanitize_ipv6_prefix(struct in6_addr *ipv6addr, u_int8_t prefixlen){
-    unsigned int skip, i;
-    u_int16_t	mask;
-    
-    skip= (prefixlen+15)/16;
-
-    if(prefixlen%16){
-		mask=0;
-
-		for(i=0; i<(prefixlen%16); i++)
-	    	mask= (mask>>1) | 0x8000;
-
-		ipv6addr->s6_addr16[skip-1]= ipv6addr->s6_addr16[skip-1] & htons(mask);
-    }
-			
-    for(i=skip; i<8; i++)
-		ipv6addr->s6_addr16[i]=0;
 }
 

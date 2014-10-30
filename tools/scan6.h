@@ -33,6 +33,8 @@
 #define PCAP_ICMPV6_ERQNSNA_FILTER	"icmp6 and ((ip6[40]==129 and ip6[41]==0) or ((ip6[40]==135 or ip6[40]==136) and ip6[41]==0 and ip6[7]==255))"
 #define PCAP_ICMPV6_ERRORNSNA_FILTER	"icmp6 and ((ip6[40]==4) or ((ip6[7]==255 and ip6[41]==0) and (ip6[40]==135 or ip6[40]==136)))"
 #define PCAP_TCP_NSNA_FILTER		"(ip6 and tcp) or (icmp6 and ip6[7]==255 and ip6[41]==0 and (ip6[40]==135 or ip6[40]==136))"
+#define PCAP_UDP_NSNA_FILTER		"(ip6 and (udp or icmp6)) or (icmp6 and ip6[7]==255 and ip6[41]==0 and (ip6[40]==135 or ip6[40]==136))"
+#define PCAP_TCP_UDP_NSNA_FILTER	"(ip6 and (tcp or udp or icmp6)) or (icmp6 and ip6[7]==255 and ip6[41]==0 and (ip6[40]==135 or ip6[40]==136))"
 
 /* Remote scans */
 #define LOW_BYTE_1ST_WORD_UPPER		0x1500
@@ -42,8 +44,10 @@
 #define	OUI_HEX_STRING_SIZE		5
 #define	MAX_IEEE_OUIS			1000
 #define MAX_SCAN_ENTRIES		65535
+#define MAX_PORT_ENTRIES		65536
 #define MAX_PREF_ENTRIES		MAX_SCAN_ENTRIES
 #define	SELECT_TIMEOUT			4
+#define	PSCAN_TIMEOUT			1
 #define MAX_RANGE_STR_LEN		79
 #define MIN_INC_RANGE			1000
 /* #define	MAX_DESTNATIONS			65535 */
@@ -57,11 +61,19 @@
 #define MAX_FILENAME_SIZE		250
 
 
+union my6_addr{
+	uint8_t		s6addr[16];
+	uint16_t	s6addr16[8];
+	uint32_t	s6addr32[4];
+	struct in6_addr	in6_addr;
+};
+
+
 /* Stores one remote target to scan */
 struct scan_entry{
-	struct in6_addr		start;
-	struct in6_addr		end;
-	struct in6_addr		cur;
+	union my6_addr		start;
+	union my6_addr		end;
+	union my6_addr		cur;
 };
 
 /* Store the list of remote targets to scan */
@@ -72,4 +84,40 @@ struct scan_list{
 	unsigned int		maxtarget;
 	unsigned int		inc;
 };
+
+
+#define	MAX_PORTS_LINE_SIZE			80
+
+/* Stores one port entry to scan */
+struct port_entry{
+	uint16_t	start;
+	uint16_t	end;
+	uint16_t	cur;
+};
+
+/* Store the list of remote targets to scan */
+struct port_list{
+	struct port_entry	**port;
+	unsigned int		cport;
+	unsigned int		nport;
+	unsigned int		maxport;
+	unsigned int		proto;
+	struct port_table_entry *port_table;
+};
+
+
+/* Store the list of remote targets to scan */
+struct port_table_entry{
+	unsigned int	loaded;
+	char	name[MAX_PORTS_LINE_SIZE];
+};
+
+
+
+/* Constants for port scan results */
+
+#define PORT_FILTERED	1
+#define PORT_OPEN		2
+#define PORT_CLOSED		4
+
 

@@ -11,8 +11,8 @@
 # variable accordingly. The path of the manual pages can be overriden by setting
 # the MANPREFIX variable. Typically, packages will set these variables as follows:
 #
-# PREFIX=usr/
-# MANPREFIX=usr/share
+# PREFIX=/usr/
+# MANPREFIX=/usr/share
 #
 # Finally, please note that this makefile supports the DESTDIR variable, as 
 # typically employed by package developers.
@@ -22,16 +22,23 @@ CC= gcc
 CFLAGS+= -Wall
 LDFLAGS+= -lpcap -lm
 
+ifeq ($(shell uname),SunOS)
+  LDFLAGS+=-lsocket -lnsl
+  OS=SunOS
+endif
+
+
 ifndef PREFIX
-PREFIX=/usr/local
-ifndef MANPREFIX
-MANPREFIX=/usr/local
-endif
+	PREFIX=/usr/local
+	ifndef MANPREFIX
+		MANPREFIX=/usr/local
+	endif
 else
-ifndef MANPREFIX
-MANPREFIX=/usr/share
+	ifndef MANPREFIX
+		MANPREFIX=/usr/share
+	endif
 endif
-endif 
+
 
 ETCPATH= $(DESTDIR)/etc
 MANPATH= $(DESTDIR)$(MANPREFIX)/man
@@ -41,15 +48,18 @@ SBINPATH= $(DESTDIR)$(PREFIX)/sbin
 SRCPATH= tools
 
 
-SBINTOOLS= flow6 frag6 icmp6 jumbo6 na6 ni6 ns6 ra6 rd6 rs6 scan6 tcp6
+SBINTOOLS= blackhole6 flow6 frag6 icmp6 jumbo6 na6 ni6 ns6 path6 ra6 rd6 rs6 scan6 script6 tcp6
 BINTOOLS= addr6
 TOOLS= $(BINTOOLS) $(SBINTOOLS)
 LIBS= libipv6.o
 
-all: $(TOOLS) $(LIBS) ipv6toolkit.conf
+all: $(TOOLS) data/ipv6toolkit.conf
 
-addr6: $(SRCPATH)/addr6.c $(SRCPATH)/addr6.h $(SRCPATH)/ipv6toolkit.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o addr6 $(SRCPATH)/addr6.c $(LDFLAGS) 
+addr6: $(SRCPATH)/addr6.c $(SRCPATH)/addr6.h $(SRCPATH)/ipv6toolkit.h $(LIBS) $(SRCPATH)/libipv6.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o addr6 $(SRCPATH)/addr6.c $(LIBS) $(LDFLAGS) 
+
+blackhole6: $(SRCPATH)/blackhole6
+	cp $(SRCPATH)/blackhole6 ./
 
 flow6: $(SRCPATH)/flow6.c $(SRCPATH)/flow6.h $(SRCPATH)/ipv6toolkit.h $(LIBS) $(SRCPATH)/libipv6.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o flow6 $(SRCPATH)/flow6.c $(LIBS) $(LDFLAGS)
@@ -72,6 +82,9 @@ ni6: $(SRCPATH)/ni6.c $(SRCPATH)/ni6.h $(SRCPATH)/ipv6toolkit.h $(LIBS) $(SRCPAT
 ns6: $(SRCPATH)/ns6.c $(SRCPATH)/ns6.h $(SRCPATH)/ipv6toolkit.h $(LIBS) $(SRCPATH)/libipv6.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o ns6 $(SRCPATH)/ns6.c $(LIBS) $(LDFLAGS)
 
+path6: $(SRCPATH)/path6.c $(SRCPATH)/path6.h $(SRCPATH)/ipv6toolkit.h $(LIBS) $(SRCPATH)/libipv6.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o path6 $(SRCPATH)/path6.c $(LIBS) $(LDFLAGS)
+
 ra6: $(SRCPATH)/ra6.c $(SRCPATH)/ra6.h $(SRCPATH)/ipv6toolkit.h $(LIBS) $(SRCPATH)/libipv6.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o ra6 $(SRCPATH)/ra6.c $(LIBS) $(LDFLAGS)
 
@@ -84,16 +97,21 @@ rs6: $(SRCPATH)/rs6.c $(SRCPATH)/rs6.h $(SRCPATH)/ipv6toolkit.h $(LIBS) $(SRCPAT
 scan6: $(SRCPATH)/scan6.c $(SRCPATH)/scan6.h $(SRCPATH)/ipv6toolkit.h $(LIBS) $(SRCPATH)/libipv6.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o scan6 $(SRCPATH)/scan6.c $(LIBS) $(LDFLAGS)
 
+script6: $(SRCPATH)/script6
+	cp $(SRCPATH)/script6 ./
+
 tcp6: $(SRCPATH)/tcp6.c $(SRCPATH)/tcp6.h $(SRCPATH)/ipv6toolkit.h $(LIBS) $(SRCPATH)/libipv6.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -o tcp6 $(SRCPATH)/tcp6.c $(LIBS) $(LDFLAGS)
 
 libipv6.o: $(SRCPATH)/libipv6.c $(SRCPATH)/libipv6.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o libipv6.o $(SRCPATH)/libipv6.c
 
-ipv6toolkit.conf:
+data/ipv6toolkit.conf:
 	echo "# SI6 Networks' IPv6 Toolkit Configuration File" > \
            data/ipv6toolkit.conf
 	echo OUI-Database=$(PREFIX)/share/ipv6toolkit/oui.txt >> \
+           data/ipv6toolkit.conf 
+	echo Ports-Database=$(PREFIX)/share/ipv6toolkit/service-names-port-numbers.csv >> \
            data/ipv6toolkit.conf 
 
 clean: 
@@ -101,6 +119,7 @@ clean:
 	rm -f data/ipv6toolkit.conf
 
 install: all
+ifneq ($(OS),SunOS)
 	# Install the binaries
 	install -m0755 -d $(BINPATH)
 	install -m0755 -d $(SBINPATH)
@@ -108,11 +127,15 @@ install: all
 	install -m0755 $(SBINTOOLS) $(SBINPATH)
 
 	# Install the configuration file
+	install -m0755 -d $(ETCPATH)
 	install -m0644 data/ipv6toolkit.conf $(ETCPATH)
 
 	# Install the IEEE OUI database
 	install -m0755 -d $(DATAPATH)
 	install -m0644 data/oui.txt $(DATAPATH)
+
+	# Install the port numbers database
+	install -m0644 data/service-names-port-numbers.csv $(DATAPATH)
 
 	# Install the manual pages
 	install -m0755 -d $(MANPATH)/man1
@@ -121,17 +144,77 @@ install: all
 	install -m0644 manuals/*.5 $(MANPATH)/man5
 	install -m0755 -d $(MANPATH)/man7
 	install -m0644 manuals/*.7 $(MANPATH)/man7
+else
+	# Install the binaries
+	install -m 0755 -d $(BINPATH)
+	install -m 0755 -d $(SBINPATH)
+
+	install -m 0755 -f $(BINPATH) addr6 
+	install -m 0755 -f $(SBINPATH) blackhole6
+	install -m 0755 -f $(SBINPATH) flow6
+	install -m 0755 -f $(SBINPATH) frag6
+	install -m 0755 -f $(SBINPATH) icmp6
+	install -m 0755 -f $(SBINPATH) jumbo6
+	install -m 0755 -f $(SBINPATH) script6
+	install -m 0755 -f $(SBINPATH) na6
+	install -m 0755 -f $(SBINPATH) ni6
+	install -m 0755 -f $(SBINPATH) ns6
+	install -m 0755 -f $(SBINPATH) path6
+	install -m 0755 -f $(SBINPATH) ra6
+	install -m 0755 -f $(SBINPATH) rd6
+	install -m 0755 -f $(SBINPATH) rs6
+	install -m 0755 -f $(SBINPATH) scan6
+	install -m 0755 -f $(SBINPATH) tcp6
+
+	# Install the configuration file
+	install -m 0755 -d $(ETCPATH)
+	install -m 0644 -f $(ETCPATH) data/ipv6toolkit.conf
+
+	# Install the IEEE OUI database
+	install -m 0755 -d $(DATAPATH)
+	install -m 0644 -f $(DATAPATH) data/oui.txt
+
+	# Install the port numbers database
+	install -m 0644 -f $(DATAPATH) data/service-names-port-numbers.csv
+
+	# Install the manual pages
+	install -m 0755 -d $(MANPATH)/man1
+	install -m 0644 -f $(MANPATH)/man1 manuals/addr6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/blackhole6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/flow6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/frag6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/icmp6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/jumbo6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/na6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/ni6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/ns6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/path6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/ra6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/rd6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/rs6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/scan6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/script6.1
+	install -m 0644 -f $(MANPATH)/man1 manuals/tcp6.1
+	install -m 0755 -d $(MANPATH)/man5
+	install -m 0644 -f $(MANPATH)/man5 manuals/ipv6toolkit.conf.5
+	install -m 0755 -d $(MANPATH)/man7
+	install -m 0644 -f $(MANPATH)/man7 manuals/ipv6toolkit.7
+endif
+
 
 uninstall:
 	# Remove the binaries
 	rm -f $(BINPATH)/addr6
+	rm -f $(SBINPATH)/blackhole6
 	rm -f $(SBINPATH)/flow6
 	rm -f $(SBINPATH)/frag6
 	rm -f $(SBINPATH)/icmp6
 	rm -f $(SBINPATH)/jumbo6
+	rm -f $(SBINPATH)/script6
 	rm -f $(SBINPATH)/na6
 	rm -f $(SBINPATH)/ni6
 	rm -f $(SBINPATH)/ns6
+	rm -f $(SBINPATH)/path6
 	rm -f $(SBINPATH)/ra6
 	rm -f $(SBINPATH)/rd6
 	rm -f $(SBINPATH)/rs6
@@ -141,11 +224,12 @@ uninstall:
 	# Remove the configuration file
 	rm -f $(ETCPATH)/ipv6toolkit.conf
 
-	# Remove the IEEE OUI database
+	# Remove the IEEE OUI database and port number database
 	rm -rf $(DATAPATH)
 
 	# Remove the manual pages
 	rm -f $(MANPATH)/man1/addr6.1
+	rm -f $(MANPATH)/man1/blackhole6.1
 	rm -f $(MANPATH)/man1/flow6.1
 	rm -f $(MANPATH)/man1/frag6.1
 	rm -f $(MANPATH)/man1/icmp6.1
@@ -153,10 +237,12 @@ uninstall:
 	rm -f $(MANPATH)/man1/na6.1
 	rm -f $(MANPATH)/man1/ni6.1
 	rm -f $(MANPATH)/man1/ns6.1
+	rm -f $(MANPATH)/man1/path6.1
 	rm -f $(MANPATH)/man1/ra6.1
 	rm -f $(MANPATH)/man1/rd6.1
 	rm -f $(MANPATH)/man1/rs6.1
 	rm -f $(MANPATH)/man1/scan6.1
+	rm -f $(MANPATH)/man1/script6.1
 	rm -f $(MANPATH)/man1/tcp6.1
 	rm -f $(MANPATH)/man5/ipv6toolkit.conf.5
 	rm -f $(MANPATH)/man7/ipv6toolkit.7

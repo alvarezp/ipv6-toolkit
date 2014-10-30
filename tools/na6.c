@@ -18,7 +18,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
  * 
  * Build with: make na6
  * 
@@ -89,8 +88,8 @@ unsigned int		skip;
 unsigned int		ntargets, sources, nsources, targets, nsleep;
 unsigned char		targetpreflen;
 
-u_int16_t			mask;
-u_int8_t			hoplimit;
+uint16_t			mask;
+uint8_t			hoplimit;
 
 char				plinkaddr[ETHER_ADDR_PLEN];
 char 				psrcaddr[INET6_ADDRSTRLEN], pdstaddr[INET6_ADDRSTRLEN], pv6addr[INET6_ADDRSTRLEN];
@@ -98,7 +97,7 @@ unsigned char 		floodt_f=0, targetaddr_f=0;
 unsigned char 		listen_f = 0, multicastdst_f=0, accepted_f=0, loop_f=0, sleep_f=0;
 unsigned char		tllaopt_f=0, tllaopta_f=0, targetprefix_f=0, hoplimit_f=0;
 unsigned char		newdata_f=0, floods_f=0;
-u_int32_t			router_f=0, solicited_f=0, override_f=0;
+uint32_t			router_f=0, solicited_f=0, override_f=0;
 
 /* Support for Extension Headers */
 unsigned int		dstopthdrs, dstoptuhdrs, hbhopthdrs;
@@ -110,11 +109,10 @@ unsigned int		hbhopthdrlen[MAX_HBH_OPT_HDR], m, pad;
 
 struct ip6_frag		fraghdr, *fh;
 struct ip6_hdr		*fipv6;
-unsigned char		fragh_f=0;
 unsigned char		fragbuffer[ETHER_HDR_LEN+MIN_IPV6_HLEN+MAX_IPV6_PAYLOAD];
 unsigned char		*fragpart, *fptr, *fptrend, *ptrend, *ptrhdr, *ptrhdrend;
 unsigned int		hdrlen, ndstopthdr=0, nhbhopthdr=0, ndstoptuhdr=0;
-unsigned int		nfrags, fragsize, max_packet_size;
+unsigned int		nfrags, fragsize;
 unsigned char		*prev_nh, *startoffragment;
 struct filters		filters;
 struct iface_data	idata;
@@ -123,6 +121,9 @@ int main(int argc, char **argv){
 	extern char		*optarg;
 	int				r, sel;
 	fd_set			sset, rset;
+#if defined(sun) && defined(__sun)
+	struct timeval		timeout;
+#endif
 
 	static struct option longopts[] = {
 		{"interface", required_argument, 0, 'i'},
@@ -157,12 +158,13 @@ int main(int argc, char **argv){
 		{"sleep", required_argument, 0, 'z'},
 		{"listen", no_argument, 0, 'L'},
 		{"verbose", no_argument, 0, 'v'},
-		{"help", no_argument, 0, 'h'}
+		{"help", no_argument, 0, 'h'},
+		{0, 0, 0,  0 }
 	};
 
-    char shortopts[]= "i:s:d:A:u:U:H:y:S:D:t:roceE:j:k:J:K:w:b:g:B:G:W:T:F:lz:vhL";
+	char shortopts[]= "i:s:d:A:u:U:H:y:S:D:t:roceE:j:k:J:K:w:b:g:B:G:W:T:F:lz:vhL";
 
-    char option;
+	char option;
 
 	if(argc<=1){
 		usage();
@@ -246,7 +248,7 @@ int main(int argc, char **argv){
 				}
 		
 				nfrags = (nfrags +7) & 0xfff8;
-				fragh_f= 1;
+				idata.fragh_f= 1;
 				break;
 
 			case 'u':	/* Destinations Options Header */
@@ -345,7 +347,7 @@ int main(int argc, char **argv){
 
 				hdrlen= atoi(optarg);
 		
-				if(hdrlen <= 8){
+				if(hdrlen < 8){
 					puts("Bad length in Hop-by-Hop Options Header");
 					exit(EXIT_FAILURE);
 				}
@@ -825,13 +827,12 @@ int main(int argc, char **argv){
 	    The KAME implementation discards addresses in which the second highe-order 16 bits
 	    (srcaddr.s6_addr16[1] in our case) are not zero.
 	    */  
-		idata.srcaddr.s6_addr16[0]= htons(0xfe80); /* Link-local unicast prefix */
-	
-		for(i=1;i<4;i++)
-			idata.srcaddr.s6_addr16[i]=0x0000;	
-	    
-		for(i=4; i<8; i++)
-			idata.srcaddr.s6_addr16[i]=random();
+		if ( inet_pton(AF_INET6, "fe80::", &(idata.srcaddr)) <= 0){
+			puts("inet_pton(): Error when converting address");
+			exit(EXIT_FAILURE);
+		}
+
+		randomize_ipv6_addr(&(idata.srcaddr), &(idata.srcaddr), 64);
 	}
 
 	/*
@@ -839,10 +840,12 @@ int main(int argc, char **argv){
 	   select the random Source Addresses from the link-local unicast prefix (fe80::/64).
 	 */
 	if(floods_f && !idata.srcprefix_f){
-		idata.srcaddr.s6_addr16[0]= htons(0xfe80); /* Link-local unicast prefix */
+		if ( inet_pton(AF_INET6, "fe80::", &(idata.srcaddr)) <= 0){
+			puts("inet_pton(): Error when converting address");
+			exit(EXIT_FAILURE);
+		}
 
-		for(i=1;i<8;i++)
-			idata.srcaddr.s6_addr16[i]=0x0000;
+		randomize_ipv6_addr(&(idata.srcaddr), &(idata.srcaddr), 64);
 	
 		idata.srcpreflen=64;
 	}
@@ -875,11 +878,12 @@ int main(int argc, char **argv){
 	   select the random Target Addresses from the link-local unicast prefix (fe80::/64).
 	 */
 	if(floodt_f && !targetprefix_f){
-		targetaddr.s6_addr16[0]= htons(0xfe80); /* Link-local unicast prefix */
+		if ( inet_pton(AF_INET6, "fe80::", &targetaddr) <= 0){
+			puts("inet_pton(): Error when converting address");
+			exit(EXIT_FAILURE);
+		}
 
-		for(i=1;i<8;i++)
-			targetaddr.s6_addr16[i]=0x0000;
-	
+		randomize_ipv6_addr(&targetaddr, &targetaddr, 64);
 		targetpreflen=64;
 	}
 
@@ -892,16 +896,11 @@ int main(int argc, char **argv){
 	if(!sleep_f)
 		nsleep=1;
 
-	if( !fragh_f && dstoptuhdr_f){
+	if(!idata.fragh_f && dstoptuhdr_f){
 		puts("Dst. Options Header (Unfragmentable Part) set, but Fragmentation not specified");
 		exit(EXIT_FAILURE);
 	}
     
-	if(fragh_f)
-		idata.max_packet_size = MAX_IPV6_PAYLOAD + MIN_IPV6_HLEN;
-	else
-		idata.max_packet_size = idata.mtu;
-
 	if(idata.verbose_f){
 		print_attack_info(&idata);
 	}
@@ -938,11 +937,6 @@ int main(int argc, char **argv){
 	}
 
 	if(listen_f){
-		if( (idata.fd= pcap_fileno(idata.pfd)) == -1){
-			puts("Error obtaining descriptor number for pcap_t");
-			exit(EXIT_FAILURE);
-		}
-
 		FD_ZERO(&sset);
 		FD_SET(idata.fd, &sset);
 
@@ -954,7 +948,13 @@ int main(int argc, char **argv){
 		while(listen_f){
 			rset= sset;
 
+#if defined(sun) && defined(__sun)
+			timeout.tv_usec=1000;
+			timeout.tv_sec= 0;
+			if((sel=select(idata.fd+1, &rset, NULL, NULL, &timeout)) == -1){
+#else
 			if((sel=select(idata.fd+1, &rset, NULL, NULL, NULL)) == -1){
+#endif
 				if(errno == EINTR){
 					continue;
 				}
@@ -964,29 +964,113 @@ int main(int argc, char **argv){
 				}
 			}
 
-			/* Read a Neighbor Solicitation message */
-			if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
-				printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
-				exit(EXIT_FAILURE);
-			}
-			else if(r == 0){
-				continue; /* Should never happen */
-			}
+#if defined(sun) || defined(__sun)
+			if(TRUE){
+#else
+			if(sel && FD_ISSET(idata.fd, &rset)){
+#endif
+				/* Read a Neighbor Solicitation message */
+				if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
+					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
+					exit(EXIT_FAILURE);
+				}
+				else if(r == 1){
+					pkt_ether = (struct ether_header *) pktdata;
+					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + ETHER_HDR_LEN);
+					pkt_ns = (struct nd_neighbor_solicit *) ((char *) pkt_ipv6 + MIN_IPV6_HLEN);
 
-			pkt_ether = (struct ether_header *) pktdata;
-			pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + ETHER_HDR_LEN);
-			pkt_ns = (struct nd_neighbor_solicit *) ((char *) pkt_ipv6 + MIN_IPV6_HLEN);
+					accepted_f=0;
 
-			accepted_f=0;
+					if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK)){
+						if(filters.nblocklinksrc){
+							if(match_ether(filters.blocklinksrc, filters.nblocklinksrc, &(pkt_ether->src))){
+								if(idata.verbose_f>1)
+									print_filter_result(&idata, pktdata, BLOCKED);
+		
+								continue;
+							}
+						}
 
+						if(filters.nblocklinkdst){
+							if(match_ether(filters.blocklinkdst, filters.nblocklinkdst, &(pkt_ether->dst))){
+								if(idata.verbose_f>1)
+									print_filter_result(&idata, pktdata, BLOCKED);
+		
+								continue;
+							}
+						}
+					}
+	
+					if(filters.nblocksrc){
+						if(match_ipv6(filters.blocksrc, filters.blocksrclen, filters.nblocksrc, &(pkt_ipv6->ip6_src))){
+							if(idata.verbose_f>1)
+								print_filter_result(&idata, pktdata, BLOCKED);
+		
+							continue;
+						}
+					}
+	
+					if(filters.nblockdst){
+						if(match_ipv6(filters.blockdst, filters.blockdstlen, filters.nblockdst, &(pkt_ipv6->ip6_dst))){
+							if(idata.verbose_f>1)
+								print_filter_result(&idata, pktdata, BLOCKED);
+		
+							continue;
+						}
+					}
 
-			if(idata.verbose_f>1)
-				print_filter_result(&idata, pktdata, ACCEPTED);
+					if(filters.nblocktarget){
+						if(match_ipv6(filters.blocktarget, filters.blocktargetlen, filters.nblocktarget, &(pkt_ns->nd_ns_target))){
+							if(idata.verbose_f>1)
+								print_filter_result(&idata, pktdata, BLOCKED);
+		
+							continue;
+						}
+					}
 
-			/* Send a Neighbor Advertisement */
-			if(send_packet(&idata, pkthdr, pktdata) == FAILURE){
-				puts("Error while sending packet");
-				exit(EXIT_FAILURE);
+					if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK)){	
+						if(filters.nacceptlinksrc){
+							if(match_ether(filters.acceptlinksrc, filters.nacceptlinksrc, &(pkt_ether->src)))
+								accepted_f=1;
+						}
+
+						if(filters.nacceptlinkdst && !accepted_f){
+							if(match_ether(filters.acceptlinkdst, filters.nacceptlinkdst, &(pkt_ether->dst)))
+								accepted_f= 1;
+						}
+					}
+
+					if(filters.nacceptsrc && !accepted_f){
+						if(match_ipv6(filters.acceptsrc, filters.acceptsrclen, filters.nacceptsrc, &(pkt_ipv6->ip6_src)))
+							accepted_f= 1;
+					}
+
+					if(filters.nacceptdst && !accepted_f){
+						if(match_ipv6(filters.acceptdst, filters.acceptdstlen, filters.nacceptdst, &(pkt_ipv6->ip6_dst)))
+							accepted_f=1;
+					}
+
+					if(filters.naccepttarget && !accepted_f){
+						if(match_ipv6(filters.accepttarget, filters.accepttargetlen, filters.naccepttarget, &(pkt_ns->nd_ns_target)))
+							accepted_f=1;
+					}
+	
+					if(filters.acceptfilters_f && !accepted_f){
+						if(idata.verbose_f>1)
+							print_filter_result(&idata, pktdata, BLOCKED);
+
+						continue;
+					}
+
+					if(idata.verbose_f>1)
+						print_filter_result(&idata, pktdata, ACCEPTED);
+
+					/* Send a Neighbor Advertisement */
+					if(send_packet(&idata, pkthdr, pktdata) == FAILURE){
+						puts("Error while sending packet");
+						exit(EXIT_FAILURE);
+					}
+				}
 			}
 		}
     
@@ -1011,15 +1095,28 @@ int main(int argc, char **argv){
  * that are expected to remain constant for the specified attack.
  */
 void init_packet_data(struct iface_data *idata){
+	struct dlt_null *dlt_null;
 	ethernet= (struct ether_header *) buffer;
+	dlt_null= (struct dlt_null *) buffer;
 	v6buffer = buffer + idata->linkhsize;
 	ipv6 = (struct ip6_hdr *) v6buffer;
 
-	if(idata->flags != IFACE_TUNNEL && idata->flags != IFACE_LOOPBACK){
-		ethernet->src = idata->hsrcaddr;
-		ethernet->dst = idata->hdstaddr;
+	if(idata->type == DLT_EN10MB){
 		ethernet->ether_type = htons(ETHERTYPE_IPV6);
+
+	if(!(idata->flags & IFACE_LOOPBACK)){
+			ethernet->src = idata->hsrcaddr;
+			ethernet->dst = idata->hdstaddr;
+		}
 	}
+	else if(idata->type == DLT_NULL){
+		dlt_null->family= PF_INET6;
+	}
+#if defined (__OpenBSD__)
+	else if(idata->type == DLT_LOOP){
+		dlt_null->family= htonl(PF_INET6);
+	}
+#endif
 
 	ipv6->ip6_flow=0;
 	ipv6->ip6_vfc= 0x60;
@@ -1035,7 +1132,7 @@ void init_packet_data(struct iface_data *idata){
 		hbhopthdrs=0;
 	
 		while(hbhopthdrs < nhbhopthdr){
-			if((ptr+ hbhopthdrlen[hbhopthdrs]) > (v6buffer+ ETH_DATA_LEN)){
+			if((ptr+ hbhopthdrlen[hbhopthdrs]) > (v6buffer+ idata->mtu)){
 				puts("Packet too large while processing HBH Opt. Header");
 				exit(EXIT_FAILURE);
 			}
@@ -1052,7 +1149,7 @@ void init_packet_data(struct iface_data *idata){
 		dstoptuhdrs=0;
 	
 		while(dstoptuhdrs < ndstoptuhdr){
-			if((ptr+ dstoptuhdrlen[dstoptuhdrs]) > (v6buffer+ ETH_DATA_LEN)){
+			if((ptr+ dstoptuhdrlen[dstoptuhdrs]) > (v6buffer+ idata->mtu)){
 				puts("Packet too large while processing Dest. Opt. Header (Unfrag. Part)");
 				exit(EXIT_FAILURE);
 			}
@@ -1068,12 +1165,12 @@ void init_packet_data(struct iface_data *idata){
 	/* Everything that follows is the Fragmentable Part of the packet */
 	fragpart = ptr;
 
-	if(fragh_f){
+	if(idata->fragh_f){
 		/* Check that we are able to send the Unfragmentable Part, together with a 
 		   Fragment Header and a chunk data over our link layer
 		 */
-		if( (fragpart+sizeof(fraghdr)+nfrags) > (v6buffer+ETH_DATA_LEN)){
-			puts("Unfragmentable part too large for current MTU (1500 bytes)");
+		if( (fragpart+sizeof(fraghdr)+nfrags) > (v6buffer+idata->mtu)){
+			printf("Unfragmentable part too large for current MTU (%u bytes)\n", idata->mtu);
 			exit(EXIT_FAILURE);
 		}
 
@@ -1081,7 +1178,7 @@ void init_packet_data(struct iface_data *idata){
 		   This Fragment Header will be used (an assembled with the rest of the packet by the 
 		   send_packet() function.
 		*/
-		bzero(&fraghdr, FRAG_HDR_SIZE);
+		memset(&fraghdr, 0, FRAG_HDR_SIZE);
 		*prev_nh = IPPROTO_FRAGMENT;
 		prev_nh = (unsigned char *) &fraghdr;
 	}
@@ -1090,7 +1187,7 @@ void init_packet_data(struct iface_data *idata){
 		dstopthdrs=0;
 	
 		while(dstopthdrs < ndstopthdr){
-			if((ptr+ dstopthdrlen[dstopthdrs]) > (v6buffer+max_packet_size)){
+			if((ptr+ dstopthdrlen[dstopthdrs]) > (v6buffer+idata->max_packet_size)){
 			puts("Packet too large while processing Dest. Opt. Header (should be using the Frag. option?)");
 			exit(EXIT_FAILURE);
 			}
@@ -1106,7 +1203,7 @@ void init_packet_data(struct iface_data *idata){
 
 	*prev_nh = IPPROTO_ICMPV6;
 
-	if( (ptr+sizeof(struct nd_neighbor_advert)) > (v6buffer+max_packet_size)){
+	if( (ptr+sizeof(struct nd_neighbor_advert)) > (v6buffer+idata->max_packet_size)){
 		puts("Packet too large while inserting Neighbor Advertisement header (should be using Frag. option?)");
 		exit(EXIT_FAILURE);
 	}
@@ -1121,11 +1218,11 @@ void init_packet_data(struct iface_data *idata){
 	ptr += sizeof(struct nd_neighbor_advert);
 
 	if(tllaopt_f && nlinkaddr==1){
-		if( (ptr+sizeof(struct nd_opt_tlla)) <= (v6buffer+max_packet_size) ){
+		if( (ptr+sizeof(struct nd_opt_tlla)) <= (v6buffer+idata->max_packet_size) ){
 			tllaopt = (struct nd_opt_tlla *) ptr;
 			tllaopt->type= ND_OPT_TARGET_LINKADDR;
 			tllaopt->length= TLLA_OPT_LEN;
-			bcopy(linkaddr[0].a, tllaopt->address, ETH_ALEN);
+			memcpy(tllaopt->address, linkaddr[0].a, ETH_ALEN);
 			ptr += sizeof(struct nd_opt_tlla);
 		}
 		else{
@@ -1198,7 +1295,7 @@ int send_packet(struct iface_data *idata, struct pcap_pkthdr *pkthdr, const u_ch
 		   option), and the Ethernet is set to that specified by the "-S" option (or randomized).
 		 */
 		if(IN6_IS_ADDR_MULTICAST(pkt_ipv6addr)){
-			if( !idata->srcaddr_f && ((pkt_ns->nd_ns_target.s6_addr16[0] & htons(0xffc0)) == htons(0xfe80)) )
+			if( !idata->srcaddr_f && IN6_IS_ADDR_LINKLOCAL(&(pkt_ns->nd_ns_target)) )
 				ipv6->ip6_src = pkt_ns->nd_ns_target;
 			else
 				ipv6->ip6_src = idata->srcaddr;
@@ -1224,34 +1321,14 @@ int send_packet(struct iface_data *idata, struct pcap_pkthdr *pkthdr, const u_ch
 			   Randomizing the IPv6 Source address based on the prefix specified by 
 			   "srcaddr" and prefix length.
 			 */  
-			startrand= idata->srcpreflen/16;
-
-			for(i=0; i<startrand; i++)
-				ipv6->ip6_src.s6_addr16[i]= 0;
-
-			for(i=startrand; i<8; i++)
-				ipv6->ip6_src.s6_addr16[i]=random();
-
-			if(idata->srcpreflen%16){
-				mask=0xffff;
-	    
-				for(i=0; i<(idata->srcpreflen%16); i++)
-					mask= mask>>1;
-
-				ipv6->ip6_src.s6_addr16[startrand]= ipv6->ip6_src.s6_addr16[startrand] \
-											& htons(mask);
-			}
-
-			for(i=0; i<=(idata->srcpreflen/16); i++)
-				ipv6->ip6_src.s6_addr16[i]= ipv6->ip6_src.s6_addr16[i] | idata->srcaddr.s6_addr16[i];
+			randomize_ipv6_addr(&(ipv6->ip6_src), &(idata->srcaddr), idata->srcpreflen);
 
 			if(!idata->hsrcaddr_f){
-				for(i=0; i<6; i++)
-					ethernet->src.a[i]= random();
+				randomize_ether_addr(&(ethernet->src));
 			}
 	    
 			if(tllaopt_f && !tllaopta_f){
-				bcopy(ethernet->src.a, tllaopt->address, ETH_ALEN);
+				memcpy(tllaopt->address, ethernet->src.a, ETH_ALEN);
 			}
 		}
 
@@ -1263,28 +1340,7 @@ int send_packet(struct iface_data *idata, struct pcap_pkthdr *pkthdr, const u_ch
 				   Randomizing the ND Target Address based on the prefix specified by "targetaddr" 
 				   and targetpreflen.
 				 */  
-				startrand= targetpreflen/16;
-
-				for(i=0; i<startrand; i++)
-					na->nd_na_target.s6_addr16[i]= 0;
-
-				for(i=startrand; i<8; i++)
-					na->nd_na_target.s6_addr16[i]=random();
-
-				if(targetpreflen%16){
-					mask=0xffff;
-
-					for(i=0; i<(targetpreflen%16); i++)
-						mask= mask>>1;
-
-					na->nd_na_target.s6_addr16[startrand]= na->nd_na_target.s6_addr16[startrand] \
-													& htons(mask);
-				}
-
-				for(i=0; i<=(targetpreflen/16); i++)
-					na->nd_na_target.s6_addr16[i]= na->nd_na_target.s6_addr16[i] | \
-										targetaddr.s6_addr16[i];
-
+				randomize_ipv6_addr(&(na->nd_na_target), &targetaddr, targetpreflen);
 			}
 
 			/*
@@ -1300,11 +1356,11 @@ int send_packet(struct iface_data *idata, struct pcap_pkthdr *pkthdr, const u_ch
 				newdata_f=0;
 				ptr=startofprefixes;
 
-				while(linkaddrs<nlinkaddr && ((ptr+sizeof(struct nd_opt_tlla))-v6buffer)<=max_packet_size){
+				while(linkaddrs<nlinkaddr && ((ptr+sizeof(struct nd_opt_tlla))-v6buffer)<=idata->max_packet_size){
 					tllaopt = (struct nd_opt_tlla *) ptr;
 					tllaopt->type= ND_OPT_TARGET_LINKADDR;
 					tllaopt->length= TLLA_OPT_LEN;
-					bcopy(linkaddr[linkaddrs].a, tllaopt->address, ETH_ALEN);
+					memcpy(tllaopt->address, linkaddr[linkaddrs].a, ETH_ALEN);
 					ptr += sizeof(struct nd_opt_tlla);
 					linkaddrs++;
 					newdata_f=1;
@@ -1314,7 +1370,7 @@ int send_packet(struct iface_data *idata, struct pcap_pkthdr *pkthdr, const u_ch
 				na->nd_na_cksum = in_chksum(v6buffer, na, ptr-((unsigned char *)na), IPPROTO_ICMPV6);
 
 
-				if(!fragh_f){
+				if(!idata->fragh_f){
 					ipv6->ip6_plen = htons((ptr - v6buffer) - MIN_IPV6_HLEN);
 
 					if((nw=pcap_inject(idata->pfd, buffer, ptr - buffer)) == -1){
@@ -1550,7 +1606,7 @@ void print_attack_info(struct iface_data *idata){
     for(i=0; i<ndstopthdr; i++)
 	printf("Destination Options Header: %u bytes\n", dstopthdrlen[i]);
 
-    if(fragh_f)
+    if(idata->fragh_f)
 	printf("Sending each packet in fragments of %u bytes (plus the Unfragmentable part)\n", nfrags);
 
     if(!floodt_f){

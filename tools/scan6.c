@@ -1,7 +1,7 @@
 /*
- * scan6: An IPv6 Address Scanning Tool
+ * scan6: An IPv6 Scanning Tool
  *
- * Copyright (C) 2011-2013 Fernando Gont <fgont@si6networks.com>
+ * Copyright (C) 2011-2014 Fernando Gont <fgont@si6networks.com>
  *
  * Programmed by Fernando Gont for SI6 Networks <http://www.si6networks.com>
  *
@@ -32,6 +32,15 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/ip6.h>
+#include <netinet/icmp6.h>
+#include <netinet/tcp.h>
+#include <net/if.h>
+#include <netdb.h>
+#include <pcap.h>
+
 #include <errno.h>
 #include <ctype.h>
 #include <time.h>
@@ -43,25 +52,14 @@
 #include <setjmp.h>
 #include <unistd.h>
 
-#include <pcap.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <netinet/ip6.h>
-#include <netinet/icmp6.h>
-#include <netinet/tcp.h>
-#include <net/if.h>
-#include <ifaddrs.h>
-#ifdef __linux__
-	#include <netpacket/packet.h>
-#elif defined (__FreeBSD__) || defined(__NetBSD__) || defined (__OpenBSD__) || defined(__APPLE__) || ( !defined(__FreeBSD__) && defined(__FreeBSD_kernel__))
-	#include <net/if_dl.h>
-#endif
 #include "scan6.h"
 #include "ipv6toolkit.h"
 #include "libipv6.h"
 
+/* #define DEBUG */
 
 /* Function prototypes */
+void				init_packet_data(struct iface_data *);
 int					create_candidate_globals(struct iface_data *, struct host_list *, struct host_list *, \
 											struct host_list *);
 int					find_local_globals(pcap_t *, struct iface_data *, unsigned char, const char *, struct host_list *);
@@ -71,6 +69,7 @@ int					host_scan_local(pcap_t *, struct iface_data *, struct in6_addr *, unsign
 int					multi_scan_local(pcap_t *, struct iface_data *, struct in6_addr *, unsigned char, \
 									const char *, struct host_list *);
 void				print_help(void);
+void				print_port_entries(struct port_list *);
 int					print_host_entries(struct host_list *, unsigned char);
 int					print_unique_host_entries(struct host_list *, unsigned char);
 void				local_sig_alarm(int);
@@ -91,17 +90,25 @@ int					load_ipv4mapped64_entries(struct scan_list *, struct scan_entry *, struc
 int					load_embeddedport_entries(struct scan_list *, struct scan_entry *);
 int					load_lowbyte_entries(struct scan_list *, struct scan_entry *);
 int					load_oui_entries(struct scan_list *, struct scan_entry *, struct ether_addr *);
+int					load_port_table(struct port_table_entry *, char *, unsigned int);
 int					load_vm_entries(struct scan_list *, struct scan_entry *, struct prefix4_entry *);
 int					load_vendor_entries(struct scan_list *, struct scan_entry *, char *);
 int					load_knownprefix_entries(struct scan_list *, struct scan_list *, FILE *);
 int					load_knowniid_entries(struct scan_list *, struct scan_list *, struct prefix_list *);
 int					load_knowniidfile_entries(struct scan_list *, struct scan_list *, FILE *);
+int					load_smart_entries(struct scan_list *, struct scan_list *);
 int					match_strings(char *, char *);
 int					load_bruteforce_entries(struct scan_list *, struct scan_entry *);
 void				prefix_to_scan(struct prefix_entry *, struct scan_entry *);
+void				print_port_entries(struct port_list *);
+void				print_port_scan(struct port_list *, unsigned int *, int);
+void				print_port_table(struct port_table_entry *, unsigned int);
 int					get_next_target(struct scan_list *);
-int					is_target_in_range(struct scan_entry *);
+int					get_next_port(struct port_list *);
+int					is_port_in_range(struct port_list *);
+int					is_target_in_range(struct scan_list *);
 int					send_probe_remote(struct iface_data *, struct scan_list *, struct in6_addr *, unsigned char);
+int					send_pscan_probe(struct iface_data *, struct port_list *, struct in6_addr *, unsigned char);
 void				reset_scan_list(struct scan_list *);
 int					process_config_file(const char *);
 int					is_ip6_in_scan_list(struct scan_list *, struct in6_addr *);
@@ -133,6 +140,8 @@ unsigned int				pktbytes;
 struct icmp6_hdr			*pkt_icmp6;
 struct nd_neighbor_solicit	*pkt_ns;
 struct tcp_hdr				*pkt_tcp;
+struct udp_hdr				*pkt_udp;
+struct ip6_eh				*pkt_eh;
 int							result;
 unsigned char				error_f;
 
@@ -161,8 +170,8 @@ unsigned int			i, j, startrand;
 unsigned int			skip;
 unsigned char			dstpreflen;
 
-u_int16_t				mask;
-u_int8_t				hoplimit;
+uint16_t				mask;
+uint8_t				hoplimit;
 
 char 					plinkaddr[ETHER_ADDR_PLEN], pv4addr[INET_ADDRSTRLEN];
 char 					psrcaddr[INET6_ADDRSTRLEN], pdstaddr[INET6_ADDRSTRLEN], pv6addr[INET6_ADDRSTRLEN];
@@ -171,7 +180,7 @@ unsigned char 			rand_src_f=FALSE, rand_link_src_f=FALSE;
 unsigned char 			accepted_f=FALSE, configfile_f=FALSE, dstaddr_f=FALSE, hdstaddr_f=FALSE, dstprefix_f=FALSE;
 unsigned char			print_f=FALSE, print_local_f=FALSE, print_global_f=FALSE, probe_echo_f=FALSE, probe_unrec_f=FALSE, probe_f=FALSE;
 unsigned char			print_type=NOT_PRINT_ETHER_ADDR, scan_local_f=FALSE, print_unique_f=FALSE, localaddr_f=FALSE;
-unsigned char			tunnel_f=FALSE, loopback_f=FALSE, timestamps_f=FALSE;
+unsigned char			timestamps_f=FALSE;
 
 /* Support for Extension Headers */
 unsigned int			dstopthdrs, dstoptuhdrs, hbhopthdrs;
@@ -183,30 +192,39 @@ unsigned int			hbhopthdrlen[MAX_HBH_OPT_HDR], m, pad;
 
 struct ip6_frag			fraghdr, *fh;
 struct ip6_hdr			*fipv6;
-unsigned char			fragh_f=FALSE;
+
 unsigned char			fragbuffer[ETHER_HDR_LEN+MIN_IPV6_HLEN+MAX_IPV6_PAYLOAD];
 unsigned char			*fragpart, *fptr, *fptrend, *ptrend, *ptrhdr, *ptrhdrend;
 unsigned int			hdrlen, ndstopthdr=0, nhbhopthdr=0, ndstoptuhdr=0;
-unsigned int			nfrags, fragsize, max_packet_size;
+unsigned int			nfrags, fragsize;
 unsigned char			*prev_nh, *startoffragment;
 
 /* Remote scans */
 unsigned int			inc=1;
 int						ranges;
-struct	scan_list		scan_list, prefix_list;
+struct	scan_list		scan_list, prefix_list, smart_list;
 struct scan_entry		*target_list[MAX_SCAN_ENTRIES];
 struct	scan_entry		*tgt_pref_list[MAX_PREF_ENTRIES];
+struct	scan_entry		*smrt_pref_list[MAX_PREF_ENTRIES];
 struct prefix_list		iid_list;
 struct prefix_entry		*tgt_iid_list[MAX_IID_ENTRIES];
+struct port_list		tcp_port_list, udp_port_list, *port_list;
+struct port_entry		*tcp_prt_list[MAX_PORT_ENTRIES];
+struct port_entry		*udp_prt_list[MAX_PORT_ENTRIES];
+struct port_table_entry tcp_port_table[MAX_PORT_ENTRIES];
+struct port_table_entry udp_port_table[MAX_PORT_ENTRIES];
+unsigned int			*port_results, tcp_results[MAX_PORT_ENTRIES], udp_results[MAX_PORT_ENTRIES];
+uint16_t				portscanl, portscanh, portscanp, portscantemp;
 unsigned char			dst_f=FALSE, tgt_ipv4mapped32_f=FALSE, tgt_ipv4mapped64_f=FALSE, tgt_lowbyte_f=FALSE, tgt_oui_f=FALSE;
 unsigned char			tgt_vendor_f=FALSE, tgt_vm_f=FALSE, tgt_bruteforce_f=FALSE, tgt_range_f=FALSE, tgt_portembedded_f=FALSE;
 unsigned char			tgt_knowniids_f=FALSE, tgt_knowniidsfile_f=FALSE, knownprefixes_f=FALSE;
 unsigned char			vm_vbox_f=FALSE, vm_vmware_f=FALSE, vm_vmwarem_f=FALSE, v4hostaddr_f=FALSE;
-unsigned char			v4hostprefix_f=FALSE, sort_ouis_f=FALSE, rnd_probes_f=FALSE, inc_f=FALSE, end_f=FALSE, donesending_f=FALSE;
+unsigned char			v4hostprefix_f=FALSE, sort_ouis_f=FALSE, rnd_probes_f=FALSE, inc_f=FALSE, end_f=FALSE, endpscan_f=FALSE;
+unsigned char			donesending_f=FALSE;
 unsigned char			onlink_f=FALSE, pps_f=FALSE, bps_f=FALSE, tcpflags_f=FALSE, rhbytes_f=FALSE, srcport_f=FALSE, dstport_f=FALSE, probetype;
-unsigned char			loop_f=FALSE, sleep_f=FALSE;
-u_int16_t				srcport, dstport;
-u_int8_t				tcpflags=0;
+unsigned char			loop_f=FALSE, sleep_f=FALSE, smart_f=FALSE, portscan_f=FALSE, droppacket_f=FALSE, pscantype;
+uint16_t				srcport, dstport;
+uint8_t					tcpflags=0;
 unsigned long			pktinterval, rate;
 unsigned int			packetsize, rhbytes;
 struct prefix4_entry	v4host;
@@ -215,6 +233,7 @@ struct ether_addr		oui;
 char					*charstart, *charend, *lastcolon;
 char					rangestart[MAX_RANGE_STR_LEN+1], rangeend[MAX_RANGE_STR_LEN+1];
 char 					fname[MAX_FILENAME_SIZE], fname_f=FALSE, configfile[MAX_FILENAME_SIZE], knowniidsfile[MAX_FILENAME_SIZE];
+char 					portsfname[MAX_FILENAME_SIZE], portsfname_f=FALSE;
 char					knownprefixesfile[MAX_FILENAME_SIZE];
 FILE					*knowniids_fp, *knownprefixes_fp;
 char 					*oui_end=":00:00:00";
@@ -225,9 +244,9 @@ int						sel;
 fd_set					sset, rset, wset, eset;
 struct timeval			curtime, pcurtime, lastprobe;
 struct tm				pcurtimetm;
-u_int16_t				service_ports_hex[]={0x21, 0x22, 0x23, 0x25, 0x49, 0x53, 0x80, 0x110, 0x123, 0x179, 0x220, 0x389, \
+uint16_t				service_ports_hex[]={0x21, 0x22, 0x23, 0x25, 0x49, 0x53, 0x80, 0x110, 0x123, 0x179, 0x220, 0x389, \
 						                 0x443, 0x547, 0x993, 0x995, 0x1194, 0x3306, 0x5060, 0x5061, 0x5432, 0x6446, 0x8080};
-u_int16_t				service_ports_dec[]={21, 22, 23, 25, 49, 53, 80, 110, 123, 179, 220, 389, \
+uint16_t				service_ports_dec[]={21, 22, 23, 25, 49, 53, 80, 110, 123, 179, 220, 389, \
 						                 443, 547, 993, 995, 1194, 3306, 5060, 5061, 5432, 6446, 8080};
 
 
@@ -236,10 +255,13 @@ sigjmp_buf				env;
 unsigned int			canjump;
 
 int main(int argc, char **argv){
-	extern char		*optarg;
-	int			r;
-	struct timeval	timeout;
-	char			date[DATE_STR_LEN];
+	extern char				*optarg;
+	int						r;
+	struct addrinfo			hints, *res, *aiptr;
+	struct target_ipv6		target;
+	struct timeval			timeout;
+	char					date[DATE_STR_LEN];
+	uint8_t			ulhtype;
 
 	static struct option longopts[] = {
 		{"interface", required_argument, 0, 'i'},
@@ -258,6 +280,8 @@ int main(int argc, char **argv){
 		{"dst-port", required_argument, 0, 'a'},
 		{"tcp-flags", required_argument, 0, 'X'},
 		{"print-type", required_argument, 0, 'P'},
+		{"port-scan", required_argument, 0, 'j'},
+		{"tcp-scan-type", required_argument, 0, 'G'},
 		{"print-unique", no_argument, 0, 'q'},
 		{"print-link-addr", no_argument, 0, 'e'},
 		{"print-timestamp", no_argument, 0, 't'},
@@ -265,12 +289,11 @@ int main(int argc, char **argv){
 		{"timeout", required_argument, 0, 'O'},
 		{"rand-src-addr", no_argument, 0, 'f'},
 		{"rand-link-src-addr", no_argument, 0, 'F'},
+		{"smart", no_argument, 0, 'A'},
 		{"tgt-virtual-machines", required_argument, 0, 'V'},
 		{"tgt-low-byte", no_argument, 0, 'b'},
 		{"tgt-ipv4", required_argument, 0, 'B'},
-		{"tgt-ipv4-embedded", required_argument, 0, 'B'},
 		{"tgt-port", no_argument, 0, 'g'},
-		{"tgt-port-embedded", no_argument, 0, 'g'},
 		{"tgt-ieee-oui", required_argument, 0, 'k'},
 		{"tgt-vendor", required_argument, 0, 'K'},
 		{"tgt-iids-file", required_argument, 0, 'w'},
@@ -285,10 +308,11 @@ int main(int argc, char **argv){
 		{"sleep", required_argument, 0, 'z'},
 		{"config-file", required_argument, 0, 'c'},
 		{"verbose", no_argument, 0, 'v'},
-		{"help", no_argument, 0, 'h'}
+		{"help", no_argument, 0, 'h'},
+		{0, 0, 0,  0 }
 	};
 
-	char shortopts[]= "i:s:d:u:U:H:y:S:D:Lp:Z:o:a:X:P:qetx:O:fFV:bB:gk:K:w:W:m:Q:TNI:r:lz:c:vh";
+	char shortopts[]= "i:s:d:u:U:H:y:S:D:Lp:Z:o:a:X:P:j:G:qetx:O:fFV:bB:gk:K:w:W:m:Q:TNI:r:lz:c:vh";
 
 	char option;
 
@@ -305,12 +329,34 @@ int main(int argc, char **argv){
 	/* Initialize the scan_list structure (for remote scans) */
 	scan_list.target=target_list;
 	scan_list.ntarget=0;
+	scan_list.ctarget=0;
 	scan_list.maxtarget= MAX_SCAN_ENTRIES;
 
 	/* Initialize the prefix_list structure (for remote scans) */
 	prefix_list.target= tgt_pref_list;
 	prefix_list.ntarget=0;
+	prefix_list.ctarget=0;
 	prefix_list.maxtarget= MAX_PREF_ENTRIES;
+
+	/* Initialize the smart_list structure (for remote scans) */
+	smart_list.target= smrt_pref_list;
+	smart_list.ntarget=0;
+	smart_list.ctarget=0;
+	smart_list.maxtarget= MAX_PREF_ENTRIES;
+
+	/* Initialize the TCP port struture (for port scans) */
+	tcp_port_list.port= tcp_prt_list;
+	tcp_port_list.nport=0;
+	tcp_port_list.cport=0;
+	tcp_port_list.proto= IPPROTO_TCP;
+	tcp_port_list.maxport= MAX_PORT_ENTRIES;
+
+	/* Initialize the UDP port struture (for port scans) */
+	udp_port_list.port= tcp_prt_list;
+	udp_port_list.nport=0;
+	udp_port_list.cport=0;
+	udp_port_list.proto= IPPROTO_UDP;
+	udp_port_list.maxport= MAX_PORT_ENTRIES;
 
 	/* Initialize the iid_list structure (for remote scans/tracking) */
 	iid_list.prefix= tgt_iid_list;
@@ -356,8 +402,146 @@ int main(int argc, char **argv){
 				break;
 
 			case 'd':	/* IPv6 Destination Address/Prefix */
+				if(!address_contains_colons(optarg)){
+					/* The '-d' option contains a domain name */
+					if((charptr = strtok_r(optarg, "/", &lasts)) == NULL){
+						puts("Error in Destination Address");
+						exit(EXIT_FAILURE);
+					}
 
-				if( (ranges= address_contains_ranges(optarg)) == 1){
+					strncpy(target.name, charptr, NI_MAXHOST);
+					target.name[NI_MAXHOST-1]=0;
+
+					if((charptr = strtok_r(NULL, " ", &lasts)) != NULL){
+						prefix.len = atoi(charptr);
+		
+						if(prefix.len > 128){
+							puts("Prefix length error in IPv6 Destination Address");
+							exit(EXIT_FAILURE);
+						}
+					}
+					else{
+						prefix.len= 128;
+					}
+
+					memset(&hints, 0, sizeof(hints));
+					hints.ai_family= AF_INET6;
+					hints.ai_canonname = NULL;
+					hints.ai_addr = NULL;
+					hints.ai_next = NULL;
+					hints.ai_socktype= SOCK_DGRAM;
+
+					if( (target.res = getaddrinfo(target.name, NULL, &hints, &res)) != 0){
+						printf("Unknown Destination '%s': %s\n", target.name, gai_strerror(target.res));
+						exit(1);
+					}
+
+					for(aiptr=res; aiptr != NULL; aiptr=aiptr->ai_next){
+						if(aiptr->ai_family != AF_INET6)
+							continue;
+
+						if(aiptr->ai_addrlen != sizeof(struct sockaddr_in6))
+							continue;
+
+						if(aiptr->ai_addr == NULL)
+							continue;
+
+						prefix.ip6= ( (struct sockaddr_in6 *)aiptr->ai_addr)->sin6_addr;
+
+						/*
+						   If the prefix length is 128 bits (either implicitly or explicitly), we perform a smart scan
+						 */
+
+						if(smart_f || (prefix.len == 64 && !is_iid_null(&(prefix.ip6), 64))){
+							if(smart_list.ntarget <= smart_list.maxtarget){
+								if( (smart_list.target[smart_list.ntarget] = malloc(sizeof(struct scan_entry))) == NULL){
+									if(idata.verbose_f)
+										puts("scan6: Not enough memory");
+
+									exit(EXIT_FAILURE);
+								}
+
+								prefix_to_scan(&prefix, smart_list.target[smart_list.ntarget]);
+
+								if(IN6_IS_ADDR_MULTICAST(&(smart_list.target[smart_list.ntarget]->start.in6_addr))){
+									if(idata.verbose_f)
+										puts("scan6: Remote scan cannot target a multicast address");
+
+									exit(EXIT_FAILURE);
+								}
+
+								if(IN6_IS_ADDR_MULTICAST(&(smart_list.target[smart_list.ntarget]->end.in6_addr))){
+									if(idata.verbose_f)
+										puts("scan6: Remote scan cannot target a multicast address");
+
+									exit(EXIT_FAILURE);
+								}
+
+								idata.dstaddr= smart_list.target[smart_list.ntarget]->start.in6_addr;
+								smart_list.ntarget++;
+							}
+							else{
+								/*
+								   If the number of "targets" has already been exceeded, it doesn't make sense to continue further,
+								   since there wouldn't be space for any specific target types
+								 */
+								if(idata.verbose_f)
+									puts("Too many targets!");
+
+								exit(EXIT_FAILURE);
+							}
+
+						}
+						else{
+							sanitize_ipv6_prefix(&(prefix.ip6), prefix.len);
+
+							if(prefix_list.ntarget <= prefix_list.maxtarget){
+								if( (prefix_list.target[prefix_list.ntarget] = malloc(sizeof(struct scan_entry))) == NULL){
+									if(idata.verbose_f)
+										puts("scan6: Not enough memory");
+
+									exit(EXIT_FAILURE);
+								}
+
+								prefix_to_scan(&prefix, prefix_list.target[prefix_list.ntarget]);
+
+								if(IN6_IS_ADDR_MULTICAST(&(prefix_list.target[prefix_list.ntarget]->start.in6_addr))){
+									if(idata.verbose_f)
+										puts("scan6: Remote scan cannot target a multicast address");
+
+									exit(EXIT_FAILURE);
+								}
+
+								if(IN6_IS_ADDR_MULTICAST(&(prefix_list.target[prefix_list.ntarget]->end.in6_addr))){
+									if(idata.verbose_f)
+										puts("scan6: Remote scan cannot target a multicast address");
+
+									exit(EXIT_FAILURE);
+								}
+
+								idata.dstaddr= prefix_list.target[prefix_list.ntarget]->start.in6_addr;
+								prefix_list.ntarget++;
+							}
+							else{
+								/*
+								   If the number of "targets" has already been exceeded, it doesn't make sense to continue further,
+								   since there wouldn't be space for any specific target types
+								 */
+								if(idata.verbose_f)
+									puts("Too many targets!");
+
+								exit(EXIT_FAILURE);
+							}
+						}
+					}
+
+					freeaddrinfo(res);
+				}
+				else if( (ranges= address_contains_ranges(optarg)) == 1){
+					/*
+					   When an address range is specified, such address range is scanned, but the correspnding prefix is also
+					   employed for generating additional addresses to be scanned (EUI-64 based, etc.)
+					 */
 					charptr= optarg;
 					charstart= rangestart;
 					charend= rangeend;
@@ -413,39 +597,40 @@ int main(int argc, char **argv){
 							exit(EXIT_FAILURE);
 						}
 
-						if ( inet_pton(AF_INET6, rangeend, &(scan_list.target[scan_list.ntarget]->end)) <= 0){
+						if ( inet_pton(AF_INET6, rangeend, &(scan_list.target[scan_list.ntarget]->end.in6_addr)) <= 0){
 							if(idata.verbose_f>1)
 								puts("inet_pton(): Error converting IPv6 address from presentation to network format");
 
 							exit(EXIT_FAILURE);
 						}
 
-						scan_list.target[scan_list.ntarget]->cur= scan_list.target[scan_list.ntarget]->start;
+						scan_list.target[scan_list.ntarget]->cur.in6_addr= scan_list.target[scan_list.ntarget]->start.in6_addr;
 
 						/* Check whether the start address is smaller than the end address */
 						for(i=0;i<7; i++)
-							if( ntohs(scan_list.target[scan_list.ntarget]->start.s6_addr16[i]) > 
-								ntohs(scan_list.target[scan_list.ntarget]->end.s6_addr16[i])){
+							if( ntohs(scan_list.target[scan_list.ntarget]->start.s6addr16[i]) > 
+								ntohs(scan_list.target[scan_list.ntarget]->end.s6addr16[i])){
 								if(idata.verbose_f)
 									puts("Error in Destination Address range: Start address larger than end address!");
 
 								exit(EXIT_FAILURE);
 							}
 
-						if(IN6_IS_ADDR_MULTICAST(&(scan_list.target[scan_list.ntarget]->start))){
+						if(IN6_IS_ADDR_MULTICAST(&(scan_list.target[scan_list.ntarget]->start.in6_addr))){
 							if(idata.verbose_f)
 								puts("scan6: Remote scan cannot target a multicast address");
 
 							exit(EXIT_FAILURE);
 						}
 
-						if(IN6_IS_ADDR_MULTICAST(&(scan_list.target[scan_list.ntarget]->end))){
+						if(IN6_IS_ADDR_MULTICAST(&(scan_list.target[scan_list.ntarget]->end.in6_addr))){
 							if(idata.verbose_f)
 								puts("scan6: Remote scan cannot target a multicast address");
 
 							exit(EXIT_FAILURE);
 						}
 
+						idata.dstaddr= scan_list.target[scan_list.ntarget]->start.in6_addr;
 						scan_list.ntarget++;
 					}
 					else{
@@ -483,6 +668,7 @@ int main(int argc, char **argv){
 					}
 				}
 				else if(ranges == 0){
+					/* The '-d' option contains a prefix with the slash notation */
 					if((charptr = strtok_r(optarg, "/", &lasts)) == NULL){
 						puts("Error in Destination Address");
 						exit(EXIT_FAILURE);
@@ -507,45 +693,88 @@ int main(int argc, char **argv){
 						prefix.len= 128;
 					}
 
-					if(prefix_list.ntarget <= prefix_list.maxtarget){
-						if( (prefix_list.target[prefix_list.ntarget] = malloc(sizeof(struct scan_entry))) == NULL){
+					/* If the Prefix length is /128 (explicitly set, or by omission), we do a smart scan */
+					if(smart_f || (prefix.len == 64 && !is_iid_null(&(prefix.ip6), 64))){
+						if(smart_list.ntarget <= smart_list.maxtarget){
+							if( (smart_list.target[smart_list.ntarget] = malloc(sizeof(struct scan_entry))) == NULL){
+								if(idata.verbose_f)
+									puts("scan6: Not enough memory");
+
+								exit(EXIT_FAILURE);
+							}
+
+							prefix_to_scan(&prefix, smart_list.target[smart_list.ntarget]);
+
+							if(IN6_IS_ADDR_MULTICAST(&(smart_list.target[smart_list.ntarget]->start.in6_addr))){
+								if(idata.verbose_f)
+									puts("scan6: Remote scan cannot target a multicast address");
+
+								exit(EXIT_FAILURE);
+							}
+
+							if(IN6_IS_ADDR_MULTICAST(&(smart_list.target[smart_list.ntarget]->end.in6_addr))){
+								if(idata.verbose_f)
+									puts("scan6: Remote scan cannot target a multicast address");
+
+								exit(EXIT_FAILURE);
+							}
+
+							idata.dstaddr= smart_list.target[smart_list.ntarget]->start.in6_addr;
+							smart_list.ntarget++;
+						}
+						else{
+							/*
+							   If the number of "targets" has already been exceeded, it doesn't make sense to continue further,
+							   since there wouldn't be space for any specific target types
+							 */
 							if(idata.verbose_f)
-								puts("scan6: Not enough memory");
+								puts("Too many targets!");
 
 							exit(EXIT_FAILURE);
 						}
-
-						prefix_to_scan(&prefix, prefix_list.target[prefix_list.ntarget]);
-
-						if(IN6_IS_ADDR_MULTICAST(&(prefix_list.target[prefix_list.ntarget]->start))){
-							if(idata.verbose_f)
-								puts("scan6: Remote scan cannot target a multicast address");
-
-							exit(EXIT_FAILURE);
-						}
-
-						if(IN6_IS_ADDR_MULTICAST(&(prefix_list.target[prefix_list.ntarget]->end))){
-							if(idata.verbose_f)
-								puts("scan6: Remote scan cannot target a multicast address");
-
-							exit(EXIT_FAILURE);
-						}
-
-						prefix_list.ntarget++;
 					}
 					else{
-						/*
-						   If the number of "targets" has already been exceeded, it doesn't make sense to continue further,
-						   since there wouldn't be space for any specific target types
-						 */
-						if(idata.verbose_f)
-							puts("Too many targets!");
+						if(prefix_list.ntarget <= prefix_list.maxtarget){
+							if( (prefix_list.target[prefix_list.ntarget] = malloc(sizeof(struct scan_entry))) == NULL){
+								if(idata.verbose_f)
+									puts("scan6: Not enough memory");
 
-						exit(EXIT_FAILURE);
+								exit(EXIT_FAILURE);
+							}
+
+							prefix_to_scan(&prefix, prefix_list.target[prefix_list.ntarget]);
+
+							if(IN6_IS_ADDR_MULTICAST(&(prefix_list.target[prefix_list.ntarget]->start.in6_addr))){
+								if(idata.verbose_f)
+									puts("scan6: Remote scan cannot target a multicast address");
+
+								exit(EXIT_FAILURE);
+							}
+
+							if(IN6_IS_ADDR_MULTICAST(&(prefix_list.target[prefix_list.ntarget]->end.in6_addr))){
+								if(idata.verbose_f)
+									puts("scan6: Remote scan cannot target a multicast address");
+
+								exit(EXIT_FAILURE);
+							}
+
+							prefix_list.ntarget++;
+							idata.dstaddr= prefix_list.target[0]->start.in6_addr;
+						}
+						else{
+							/*
+							   If the number of "targets" has already been exceeded, it doesn't make sense to continue further,
+							   since there wouldn't be space for any specific target types
+							 */
+							if(idata.verbose_f)
+								puts("Too many targets!");
+
+							exit(EXIT_FAILURE);
+						}
 					}
 				}
 
-				idata.dstaddr= prefix_list.target[0]->start;
+				idata.dstaddr_f= TRUE;
 				dst_f=TRUE;
 				break;
 	    
@@ -690,7 +919,12 @@ int main(int argc, char **argv){
 				}
 		
 				nfrags = (nfrags +7) & 0xfff8;
-				fragh_f=TRUE;
+				idata.fragh_f=TRUE;
+
+				/* XXX: To be removed when fragmentation support is added */
+				puts("Error: scan6 does not currently support fragmentation");
+				exit(EXIT_FAILURE);
+
 				break;
 
 			case 'S':	/* Source Ethernet address */
@@ -853,6 +1087,98 @@ int main(int argc, char **argv){
 
 			case 'F':
 				rand_link_src_f=TRUE;
+				break;
+
+			case 'A':
+				smart_f=TRUE;
+				break;
+
+			case 'j':
+				if((pref = strtok_r(optarg, ":", &lasts)) == NULL){
+					printf("Error in prefix option number %u. \n", i);
+					exit(EXIT_FAILURE);
+				}
+
+				if(strncmp(pref, "udp", 3) == 0 || strncmp(pref, "udp", 3) == 0){
+					port_list= &udp_port_list;
+				}
+				else if(strncmp(pref, "tcp", 3) == 0 || strncmp(pref, "TCP", 3) == 0){
+					port_list= &tcp_port_list;
+				}
+				else{
+					puts("Error unknown protocol in 'port-scan' option");
+					exit(1);
+				}
+
+				if(address_contains_ranges(lasts)){
+					if((pref = strtok_r(NULL, "-", &lasts)) == NULL){
+						puts("Error in 'port-scan' option");
+						exit(EXIT_FAILURE);
+					}
+
+					portscanl= atoi(pref);
+					portscanh= atoi(lasts);
+				}
+				else{
+					portscanl= atoi(lasts);
+					portscanh= portscanl;
+				}
+
+				if(portscanl > portscanh){
+					portscantemp= portscanl;
+					portscanl= portscanh;
+					portscanh= portscantemp;
+				}
+
+				if(port_list->nport <= port_list->maxport){
+					if( (port_list->port[port_list->nport] = malloc(sizeof(struct port_entry))) == NULL){
+						if(idata.verbose_f)
+							puts("scan6: Not enough memory");
+
+						exit(EXIT_FAILURE);
+					}
+
+					port_list->port[port_list->nport]->start= portscanl;
+					port_list->port[port_list->nport]->end= portscanh;
+					(port_list->port[port_list->nport])->cur= (port_list->port[port_list->nport])->start;
+					port_list->nport++;
+				}
+				else{
+					/*
+					   If the number of "prots" has already been exceeded, it doesn't make sense to continue further,
+					   since there wouldn't be space for any specific target types
+								 */
+					if(idata.verbose_f)
+						puts("Too many port ranges!");
+
+					exit(EXIT_FAILURE);
+				}
+
+				portscan_f=TRUE;
+				break;
+
+			case 'G':
+				if(strncmp(optarg, "syn", strlen("syn")) == 0 || strncmp(optarg, "SYN", strlen("SYN")) == 0){
+					tcpflags= TH_SYN;
+					tcpflags_f=TRUE;
+				}
+				else if(strncmp(optarg, "fin", strlen("fin")) == 0 || strncmp(optarg, "FIN", strlen("FIN")) == 0){
+					tcpflags= TH_FIN;
+					tcpflags_f=TRUE;
+				}
+				else if(strncmp(optarg, "null", strlen("null")) == 0 || strncmp(optarg, "NULL", strlen("NULL")) == 0){
+					tcpflags= 0;
+					tcpflags_f=TRUE;
+				}
+				else if(strncmp(optarg, "xmas", strlen("xmas")) == 0 || strncmp(optarg, "XMAS", strlen("XMAS")) == 0){
+					tcpflags= TH_FIN | TH_PUSH | TH_URG;
+					tcpflags_f=TRUE;
+				}
+				else if(strncmp(optarg, "ack", strlen("ack")) == 0 || strncmp(optarg, "ACK", strlen("ACK")) == 0){
+					tcpflags= TH_ACK;
+					tcpflags_f=TRUE;
+				}
+
 				break;
 
 			case 'V':
@@ -1183,10 +1509,46 @@ int main(int argc, char **argv){
 		strncpy(configfile, "/etc/ipv6toolkit.conf", MAX_FILENAME_SIZE);
 	}
 
-	if(tgt_vendor_f){
+	if(tgt_vendor_f || portscan_f){
 		if(!process_config_file(configfile)){
 			puts("Error while processing configuration file");
 			exit(EXIT_FAILURE);
+		}
+	}
+
+	if(portscan_f){
+		if(tcp_port_list.nport){
+			/* Load service names */
+			if(!load_port_table(tcp_port_table, "tcp", MAX_PORT_ENTRIES)){
+				puts("Error while loading port number descriptions");
+				exit(EXIT_FAILURE);
+			}
+
+			/* LInk service names to port_list structure */
+			tcp_port_list.port_table= tcp_port_table;
+
+			/* Initialize port scan results (default to filtered) */
+			for(i=0; i< MAX_PORT_ENTRIES; i++)
+				tcp_results[i]= PORT_FILTERED;
+
+			/* We currently support only SYN scans for TCP */
+			tcpflags_f= TRUE;
+			tcpflags= TH_SYN;
+		}
+
+		if(udp_port_list.nport){
+			/* Load service names */
+			if(!load_port_table(udp_port_table, "udp", MAX_PORT_ENTRIES)){
+				puts("Error while loading port number descriptions");
+				exit(EXIT_FAILURE);
+			}
+
+			/* LInk service names to port_list structure */
+			udp_port_list.port_table= udp_port_table;
+
+			/* Initialize port scan results (default to open) */
+			for(i=0; i< MAX_PORT_ENTRIES; i++)
+				udp_results[i]= PORT_OPEN;
 		}
 	}
 
@@ -1206,7 +1568,7 @@ int main(int argc, char **argv){
 		exit(EXIT_FAILURE);
 	}
 
-	if(scan_local_f && (idata.type != DLT_EN10MB || loopback_f)){
+	if(scan_local_f && (idata.type != DLT_EN10MB || (idata.flags & IFACE_TUNNEL))){
 		puts("Error cannot apply local scan on a loopback or tunnel interface");
 		exit(EXIT_FAILURE);
 	}
@@ -1229,7 +1591,7 @@ int main(int argc, char **argv){
 	   in our iface_data structure.
 	 */
 	if(idata.srcaddr_f && !idata.srcprefix_f){
-		if( (idata.srcaddr.s6_addr16[0] & htons(0xffc0)) == htons(0xfe80)){
+		if(IN6_IS_ADDR_LINKLOCAL(&(idata.srcaddr))){
 			idata.ip6_local=idata.srcaddr;
 			idata.ip6_local_flag=TRUE;
 		}
@@ -1363,9 +1725,436 @@ int main(int argc, char **argv){
 			}
 		}
 	}
+	/* Perform a port-scan of a single target */
+	else if(portscan_f){
+		puts(SI6_TOOLKIT);
+		puts( "scan6: An advanced IPv6 scanning tool\n");
+		if(!bps_f && !pps_f){
+			puts("Rate-limiting probe packets to 1000 pps (override with the '-r' option if necessary)");
+		}
 
+		if(idata.verbose_f){
+			if(tcp_port_list.nport){
+				printf("Target TCP ports: ");
+				print_port_entries(&tcp_port_list);
+				puts("");
+			}
+
+			if(udp_port_list.nport){
+				printf("Target UDP ports: ");
+				print_port_entries(&udp_port_list);
+				puts("");
+			}
+		}
+
+		if(tcp_port_list.nport){
+			if(udp_port_list.nport){
+				/* Allow both TCP and UDP packets */
+				if(pcap_compile(idata.pfd, &pcap_filter, PCAP_TCP_UDP_NSNA_FILTER, PCAP_OPT, PCAP_NETMASK_UNKNOWN) == -1){
+					if(idata.verbose_f>1)
+						printf("pcap_compile(): %s\n", pcap_geterr(idata.pfd));
+
+					exit(EXIT_FAILURE);
+				}
+			}
+			else{
+				/* Allow only TCP packets */
+				if(pcap_compile(idata.pfd, &pcap_filter, PCAP_TCP_NSNA_FILTER, PCAP_OPT, PCAP_NETMASK_UNKNOWN) == -1){
+					if(idata.verbose_f>1)
+						printf("pcap_compile(): %s\n", pcap_geterr(idata.pfd));
+
+					exit(EXIT_FAILURE);
+				}
+			}
+		}
+		else{
+			if(udp_port_list.nport){
+				/* Allow only UDP packets */
+				if(pcap_compile(idata.pfd, &pcap_filter, PCAP_UDP_NSNA_FILTER, PCAP_OPT, PCAP_NETMASK_UNKNOWN) == -1){
+					if(idata.verbose_f>1)
+						printf("pcap_compile(): %s\n", pcap_geterr(idata.pfd));
+
+					exit(EXIT_FAILURE);
+				}
+			}
+			/* There is no "else" here, since port scanning is triggered by specifying some proto/port */
+		}
+
+		/* Set initial contents of the attack packet */
+		init_packet_data(&idata);
+
+		if(pcap_setfilter(idata.pfd, &pcap_filter) == -1){
+			if(idata.verbose_f>1)
+				printf("pcap_setfilter(): %s\n", pcap_geterr(idata.pfd));
+
+			exit(EXIT_FAILURE);
+		}
+
+		pcap_freecode(&pcap_filter);
+
+		FD_ZERO(&sset);
+		FD_SET(idata.fd, &sset);
+
+		if(tcp_port_list.nport){
+			pscantype= IPPROTO_TCP;
+			port_list= &tcp_port_list;
+			port_results= tcp_results;
+		}
+		else if(udp_port_list.nport){
+			pscantype= IPPROTO_UDP;
+			port_list= &udp_port_list;
+			port_results= udp_results;
+		}
+		else{
+			/* Should never happen */
+			puts("Error: Port scan selected, but no target TCP or UDP ports");
+		}
+
+		endpscan_f= FALSE;
+		end_f= FALSE;
+		donesending_f= FALSE;
+
+		puts("PORT      STATE     SERVICE");
+		while(!endpscan_f){
+			lastprobe.tv_sec= 0;	
+			lastprobe.tv_usec=0;
+			idata.pending_write_f=TRUE;	
+
+			while(!end_f){
+				rset= sset;
+				wset= sset;
+				eset= sset;
+
+				if(!donesending_f){
+					timeout.tv_sec= pktinterval / 1000000 ;	
+					timeout.tv_usec= pktinterval % 1000000;
+				}
+				else{
+#if defined(sun) || defined(__sun)
+					timeout.tv_sec= pktinterval / 1000000 ;	
+					timeout.tv_usec= pktinterval % 1000000;
+#else
+					timeout.tv_usec=0;
+					timeout.tv_sec= PSCAN_TIMEOUT;
+#endif
+				}
+
+				/*
+					Check for readability and exceptions. We only check for writeability if there is pending data
+					to send (the pcap descriptor will usually be writeable!).
+				 */
+				if((sel=select(idata.fd+1, &rset, (idata.pending_write_f?&wset:NULL), &eset, &timeout)) == -1){
+					if(errno == EINTR){
+						continue;
+					}
+					else{
+						perror("scan6:");
+						exit(EXIT_FAILURE);
+					}
+				}
+
+				if(gettimeofday(&curtime, NULL) == -1){
+					if(idata.verbose_f)
+						perror("scan6");
+
+					exit(EXIT_FAILURE);
+				}
+
+				/* Check whether we have finished probing all ports */
+				if(donesending_f){
+					if(is_time_elapsed(&curtime, &lastprobe, SELECT_TIMEOUT * 1000000)){
+						end_f=TRUE;
+					}
+				}
+
+#if !defined(sun) && !defined(__sun)
+				/*
+				   If we didn't check for writeability in the previous call to select(), we must do it now. Otherwise, we might
+				   block when trying to send a packet.
+				 */
+				if(!donesending_f && !idata.pending_write_f){
+					wset= sset;
+
+					timeout.tv_usec=0;
+					timeout.tv_sec= 0;
+
+					if( (sel=select(idata.fd+1, NULL, &wset, NULL, &timeout)) == -1){
+						if(errno == EINTR){
+							continue;
+						}
+						else{
+							perror("scan6:");
+							exit(EXIT_FAILURE);
+						}
+					}
+
+					idata.pending_write_f= TRUE;
+				}
+#endif
+
+
+#if defined(sun) || defined(__sun)
+				if(TRUE){
+#else
+				if(sel && FD_ISSET(idata.fd, &rset)){
+#endif
+					/* Must rocess incoming packet */
+					error_f=FALSE;
+
+					if((result=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
+						if(idata.verbose_f)
+							printf("Error while reading packet in main loop: pcap_next_ex(): %s", pcap_geterr(idata.pfd));
+
+						exit(EXIT_FAILURE);
+					}
+
+					if(result == 1){
+						pkt_ether = (struct ether_header *) pktdata;
+						pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
+						pkt_end = (unsigned char *) pktdata + pkthdr->caplen;
+
+						if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN))
+							continue;
+
+						/* Skip IPv6 EHs if present */
+						ulhtype= pkt_ipv6->ip6_nxt;
+						pkt_eh= (struct ip6_eh *)  ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
+
+						droppacket_f= FALSE;
+
+						while(ulhtype != IPPROTO_ICMPV6 && ulhtype != IPPROTO_TCP && ulhtype != IPPROTO_UDP && !droppacket_f){
+							if(ulhtype == IPPROTO_FRAGMENT){
+								if( ((unsigned char *)pkt_eh + sizeof(struct ip6_frag)) > pkt_end){
+									droppacket_f= TRUE;
+									break;
+								}
+
+								fh= (struct ip6_frag *)	((char *) pkt_eh);
+
+								if(fh->ip6f_offlg & IP6F_OFF_MASK){
+									droppacket_f= TRUE;
+									break;
+								}
+
+								ulhtype= fh->ip6f_nxt;
+								pkt_eh = (struct ip6_eh *) ((char *) fh + sizeof(struct ip6_frag));
+							}
+							else{
+								if( ((unsigned char *)pkt_eh + sizeof(struct ip6_eh)) > pkt_end){
+									droppacket_f=TRUE;
+									break;
+								}
+
+								ulhtype= pkt_eh->eh_nxt;
+								pkt_eh= (struct ip6_eh *) ( (char *) pkt_eh + (pkt_eh->eh_len + 1) * 8);
+							}
+
+							if( (unsigned char *)pkt_eh >= pkt_end){
+								droppacket_f= TRUE;
+								break;
+							}
+						}
+
+						if(droppacket_f){
+							continue;
+						}
+
+						pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_eh);
+						pkt_tcp= (struct tcp_hdr *) ((char *) pkt_eh);
+						pkt_udp= (struct udp_hdr *) ((char *) pkt_eh);
+						pkt_ns= (struct nd_neighbor_solicit *) ((char *) pkt_eh);
+
+						if(ulhtype == IPPROTO_ICMPV6){
+							if( idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK) && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
+								if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
+									continue;
+
+								/* 
+									If the addresses that we're using are not actually configured on the local system
+									(i.e., they are "spoofed", we must check whether it is a Neighbor Solicitation for 
+									one of our addresses, and respond with a Neighbor Advertisement. Otherwise, the kernel
+									will take care of that.
+								 */
+								if(is_ip6_in_address_list(&(idata.ip6_global), &(pkt_ns->nd_ns_target)) || \
+									is_eq_in6_addr(&(pkt_ns->nd_ns_target), &(idata.ip6_local))){
+										if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
+											if(idata.verbose_f)
+												puts("Error sending Neighbor Advertisement message");
+
+											exit(EXIT_FAILURE);
+										}
+								}
+							}
+							else if(pscantype == IPPROTO_UDP && pkt_icmp6->icmp6_type == ICMP6_DST_UNREACH && \
+ 								pkt_icmp6->icmp6_code == ICMP6_DST_UNREACH_NOPORT){
+								/* We are interested in the embedded payload */
+								pkt_ipv6=  (struct ip6_hdr *) ((char *) pkt_icmp6 + sizeof(struct icmp6_hdr));
+
+								if( ((unsigned char *)pkt_ipv6 + sizeof(struct ip6_hdr)) > pkt_end)
+									continue;
+
+								if(!is_eq_in6_addr(&(pkt_ipv6->ip6_dst), &(idata.dstaddr)))
+									continue;
+
+								ulhtype= pkt_ipv6->ip6_nxt;
+								pkt_eh= (struct ip6_eh *)  ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
+
+								droppacket_f= FALSE;
+
+								while(ulhtype != IPPROTO_ICMPV6 && ulhtype != IPPROTO_TCP && ulhtype != IPPROTO_UDP && !droppacket_f){
+									if(ulhtype == IPPROTO_FRAGMENT){
+										if( ((unsigned char *)pkt_eh + sizeof(struct ip6_frag)) > pkt_end){
+											droppacket_f= TRUE;
+											break;
+										}
+
+										fh= (struct ip6_frag *)	((char *) pkt_eh);
+
+										if(fh->ip6f_offlg & IP6F_OFF_MASK){
+											droppacket_f= TRUE;
+											break;
+										}
+
+										ulhtype= fh->ip6f_nxt;
+										pkt_eh = (struct ip6_eh *) ((char *) fh + sizeof(struct ip6_frag));
+									}
+									else{
+										/* If the EH is smaller than the minimum EH, we drop the packet */
+										if( ((unsigned char *)pkt_eh + sizeof(struct ip6_eh)) > pkt_end){
+											droppacket_f=TRUE;
+											break;
+										}
+
+										ulhtype= pkt_eh->eh_nxt;
+										pkt_eh= (struct ip6_eh *) ( (char *) pkt_eh + (pkt_eh->eh_len + 1) * 8);
+									}
+
+									if( (unsigned char *)pkt_eh >= pkt_end){
+										droppacket_f= TRUE;
+										break;
+									}
+								}
+
+								if(droppacket_f || ulhtype != IPPROTO_UDP){
+									continue;
+								}
+
+								pkt_udp= (struct udp_hdr *) ((char *) pkt_eh);
+								port_results[ntohs(pkt_udp->uh_dport)] = PORT_CLOSED;
+							}
+						}
+						/* We only bother to process TCP segments if we are currently sending TCP segments */
+						else if(pscantype== IPPROTO_TCP && ulhtype == IPPROTO_TCP){
+							if(!is_eq_in6_addr(&(idata.dstaddr), &(pkt_ipv6->ip6_src)))
+								continue;
+
+							if(srcport_f){
+								if(pkt_tcp->th_dport != htons(srcport))
+									continue;
+							}
+
+							if(in_chksum(pkt_ipv6, pkt_tcp, pkt_end-((unsigned char *)pkt_tcp), IPPROTO_TCP) != 0)
+								continue;
+
+							/* Record the port number -- XXX might use the port-setting techniques from path6 */
+							if(pkt_tcp->th_flags & TH_RST){
+								port_results[ntohs(pkt_tcp->th_sport)] = PORT_CLOSED;
+							}
+							else if(pkt_tcp->th_flags & TH_SYN){
+								port_results[ntohs(pkt_tcp->th_sport)] = PORT_OPEN;
+							}
+						}
+					}
+				}
+
+				if(!donesending_f && !idata.pending_write_f && is_time_elapsed(&curtime, &lastprobe, pktinterval)){
+					idata.pending_write_f=TRUE;
+					continue;
+				}
+
+#if defined(sun) || defined(__sun)
+				if(!donesending_f && idata.pending_write_f){
+#else
+				if(!donesending_f && idata.pending_write_f && FD_ISSET(idata.fd, &wset)){
+#endif
+					idata.pending_write_f=FALSE;
+
+					/* Check whether the current scan_entry is within range. Otherwise, get the next target */
+					if( !is_port_in_range(port_list)){
+						if(!get_next_port(port_list)){
+							if(gettimeofday(&lastprobe, NULL) == -1){
+								if(idata.verbose_f)
+									perror("scan6");
+
+								exit(EXIT_FAILURE);
+							}
+
+							donesending_f=TRUE;
+							continue;
+						}
+					}
+
+					if(!send_pscan_probe(&idata, port_list, &(idata.srcaddr), pscantype)){
+							exit(EXIT_FAILURE);
+					}
+
+					if(gettimeofday(&lastprobe, NULL) == -1){
+						if(idata.verbose_f)
+							perror("scan6");
+
+						exit(EXIT_FAILURE);
+					}
+
+					if(!get_next_port(port_list)){
+						donesending_f=TRUE;
+						continue;
+					}
+				}
+
+				if(FD_ISSET(idata.fd, &eset)){
+					if(idata.verbose_f)
+						puts("scan6: Found exception on libpcap descriptor");
+
+					exit(EXIT_FAILURE);
+				}
+			}
+
+			if(pscantype== IPPROTO_TCP){
+				/* Result types can be PORT_OPEN, PORT_CLOSED, and PORT_FILTERED */
+				print_port_scan(port_list, port_results, PORT_OPEN);
+			}
+			else{
+				print_port_scan(port_list, port_results, PORT_OPEN);
+			}
+
+			/* We always start with TCP scans (if there are any target ports) */
+			if(pscantype== IPPROTO_TCP){
+				if(udp_port_list.nport){
+					pscantype= IPPROTO_UDP;
+					port_list= &udp_port_list;
+					port_results= udp_results;
+				}
+				else{
+					endpscan_f= TRUE;
+				}
+			}
+			else{
+				endpscan_f= TRUE;
+			}
+		}
+
+		exit(EXIT_SUCCESS);
+	}
 	/* Remote scan */
 	else{
+		/* Smart entries are the first ones to be included */
+		if(smart_list.ntarget){
+			if(!load_smart_entries(&scan_list, &smart_list)){
+				puts("Couldn't load smart entries");
+				exit(EXIT_FAILURE);
+			}
+		}
+
 		if(tgt_knowniids_f){
 			if(!load_knowniid_entries(&scan_list, &prefix_list, &iid_list)){
 				puts("Couldn't load known IID IPv6 addresses");
@@ -1454,6 +2243,10 @@ int main(int argc, char **argv){
 			}
 		}
 
+		if(idata.verbose_f && !bps_f && !pps_f){
+			puts("Rate-limiting probe packets to 1000 pps (override with the '-r' option if necessary)");
+		}
+
 		if(idata.verbose_f){
 			printf("Target address ranges (%d)\n", scan_list.ntarget);
 
@@ -1464,8 +2257,9 @@ int main(int argc, char **argv){
 		}
 
 		if(!scan_local_f && !idata.ip6_global_flag){
-			if(idata.verbose_f)
+			if(idata.verbose_f){
 				puts("Cannot obtain a global address to scan remote network");
+			}
 
 			exit(EXIT_FAILURE);
 		}
@@ -1516,7 +2310,7 @@ int main(int argc, char **argv){
 
 		lastprobe.tv_sec= 0;	
 		lastprobe.tv_usec=0;
-		idata.pending_write_f=TRUE;		
+		idata.pending_write_f=TRUE;	
 
 		while(!end_f){
 			rset= sset;
@@ -1528,15 +2322,27 @@ int main(int argc, char **argv){
 				timeout.tv_usec= pktinterval % 1000000;
 			}
 			else{
+#if defined(sun) || defined(__sun)
+				timeout.tv_sec= pktinterval / 1000000 ;	
+				timeout.tv_usec= pktinterval % 1000000;
+#else
 				timeout.tv_usec=0;
 				timeout.tv_sec= SELECT_TIMEOUT;
+#endif
 			}
 
+#ifdef DEBUG
+puts("Prior to select()");
+#endif
 			/*
 				Check for readability and exceptions. We only check for writeability if there is pending data
 				to send (the pcap descriptor will usually be writeable!).
 			 */
+#if defined(sun) || defined(__sun)
+			if((sel=select(0, NULL, NULL, NULL, &timeout)) == -1){
+#else
 			if((sel=select(idata.fd+1, &rset, (idata.pending_write_f?&wset:NULL), &eset, &timeout)) == -1){
+#endif
 				if(errno == EINTR){
 					continue;
 				}
@@ -1545,7 +2351,9 @@ int main(int argc, char **argv){
 					exit(EXIT_FAILURE);
 				}
 			}
-
+#ifdef DEBUG
+puts("After select()");
+#endif
 			if(gettimeofday(&curtime, NULL) == -1){
 				if(idata.verbose_f)
 					perror("scan6");
@@ -1578,6 +2386,10 @@ int main(int argc, char **argv){
 			   If we didn't check for writeability in the previous call to select(), we must do it now. Otherwise, we might
 			   block when trying to send a packet.
 			 */
+#if !(defined(sun) || defined(__sun))
+#ifdef DEBUG
+puts("Prior secondary select()");
+#endif
 			if(!donesending_f && !idata.pending_write_f){
 				wset= sset;
 
@@ -1593,10 +2405,25 @@ int main(int argc, char **argv){
 						exit(EXIT_FAILURE);
 					}
 				}
-			}
 
-			if(FD_ISSET(idata.fd, &rset)){
+				idata.pending_write_f= TRUE;
+				continue;
+			}
+#ifdef DEBUG
+puts("After secondary select()");
+#endif
+#endif
+
+#if defined(sun) || defined(__sun)
+			if(TRUE){
+#else
+			if(sel && FD_ISSET(idata.fd, &rset)){
+#endif
 				error_f=FALSE;
+
+#ifdef DEBUG
+puts("Prior to pcap_next_ex()");
+#endif
 
 				if((result=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
 					if(idata.verbose_f)
@@ -1604,7 +2431,9 @@ int main(int argc, char **argv){
 
 					exit(EXIT_FAILURE);
 				}
-
+#ifdef DEBUG
+puts("After to pcap_next_ex()");
+#endif
 				if(result == 1){
 					pkt_ether = (struct ether_header *) pktdata;
 					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
@@ -1617,7 +2446,7 @@ int main(int argc, char **argv){
 						continue;
 
 					if(pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6){
-						if( idata.type == DLT_EN10MB && !loopback_f && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
+						if( idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK) && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
 							if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
 								continue;
 
@@ -1629,12 +2458,18 @@ int main(int argc, char **argv){
 							 */
 							if(is_ip6_in_address_list(&(idata.ip6_global), &(pkt_ns->nd_ns_target)) || \
 								is_eq_in6_addr(&(pkt_ns->nd_ns_target), &(idata.ip6_local))){
+#ifdef DEBUG
+puts("Prior to send_neighbor_advert()");
+#endif
 									if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
 										if(idata.verbose_f)
 											puts("Error sending Neighbor Advertisement message");
 
 										exit(EXIT_FAILURE);
 									}
+#ifdef DEBUG
+puts("After to send_neighbor_advert()");
+#endif
 							}
 						}
 						else if( (probetype == PROBE_ICMP6_ECHO && pkt_icmp6->icmp6_type == ICMP6_ECHO_REPLY) ||\
@@ -1737,16 +2572,22 @@ int main(int argc, char **argv){
 				}
 			}
 
+
 			if(!donesending_f && !idata.pending_write_f && is_time_elapsed(&curtime, &lastprobe, pktinterval)){
 				idata.pending_write_f=TRUE;
 				continue;
 			}
 
-			if(!donesending_f && FD_ISSET(idata.fd, &wset)){
+#if defined(sun) || defined(__sun)
+			if(!donesending_f && idata.pending_write_f){
+#else
+			if(!donesending_f && idata.pending_write_f && FD_ISSET(idata.fd, &wset)){
+#endif
+
 				idata.pending_write_f=FALSE;
 
 				/* Check whether the current scan_entry is within range. Otherwise, get the next target */
-				if( !is_target_in_range(scan_list.target[scan_list.ctarget])){
+				if( !is_target_in_range(&scan_list)){
 					if(!get_next_target(&scan_list)){
 						if(gettimeofday(&lastprobe, NULL) == -1){
 							if(idata.verbose_f)
@@ -1778,14 +2619,21 @@ int main(int argc, char **argv){
 
 			}
 
+#ifdef DEBUG
+puts("Prior to checking eset");
+#endif
+#if !(defined(sun) || defined(__sun))
 			if(FD_ISSET(idata.fd, &eset)){
 				if(idata.verbose_f)
 					puts("scan6: Found exception on libpcap descriptor");
 
 				exit(EXIT_FAILURE);
 			}
+#endif
+#ifdef DEBUG
+puts("After checking eset");
+#endif
 		}
-
 	}
 
 	exit(EXIT_SUCCESS);
@@ -1810,6 +2658,91 @@ void reset_scan_list(struct scan_list *scan){
 }
 
 
+/*
+ * Function: is_port_in_range()
+ *
+ * Checks whether a port_entry->cur is >= scan_entry->start && <= scan_entry->end
+ */
+
+int is_port_in_range(struct port_list *port_list){
+	struct port_entry	*port_entry;
+
+	if(port_list->cport >=port_list->nport || port_list->cport >= port_list->maxport){
+		return(0);
+	}
+
+	port_entry= port_list->port[port_list->cport];
+
+	if( port_entry->cur < port_entry->start || port_entry->cur > port_entry->end){
+		return(0);
+	}
+
+	return(1);
+}
+
+
+/*
+ * Function: get_next_port()
+ *
+ * "Increments" a scan_entry structure to obtain the next target to scan.
+ */
+
+int get_next_port(struct port_list *port_list){
+	if((port_list->port[port_list->cport])->cur >= (port_list->port[port_list->cport])->end){
+		port_list->cport++;
+
+		if(port_list->cport < port_list->nport && port_list->cport < port_list->maxport){
+			return(1);
+		}
+		else{
+			return(0);
+		}
+	}
+	else{
+		(port_list->port[port_list->cport])->cur++;
+	}
+
+	return(1);
+}
+
+
+/*
+ * Function: print_port_scan()
+ *
+ * Prints the result of a port scan
+ */
+
+void print_port_scan(struct port_list *port_list, unsigned int *res, int types){
+	int i, j;
+	char portstring[10];
+
+	for(i=0; i< port_list->nport; i++){
+		for(j= (port_list->port[i])->start; j <= (port_list->port[i])->end; j++){
+			snprintf(portstring, sizeof(portstring), "%u/%s", j, (port_list->proto == IPPROTO_TCP)?"tcp":"udp");
+			portstring[sizeof(portstring)-1]=0;
+
+			switch(res[j]){
+				case PORT_FILTERED:
+					if(types & PORT_FILTERED)
+						printf("%-9s filtered  %s\n", portstring, port_list->port_table[j].name);
+					break;
+
+				case PORT_OPEN:
+					if(types & PORT_OPEN)
+						printf("%-9s open      %s\n", portstring, port_list->port_table[j].name);
+					break;
+
+				case PORT_CLOSED:
+					if(types & PORT_CLOSED)
+						printf("%-9s closed    %s\n", portstring, port_list->port_table[j].name);
+					break;
+			}
+		}
+	}
+}
+
+
+
 
 /*
  * Function: is_target_in_range()
@@ -1817,17 +2750,21 @@ void reset_scan_list(struct scan_list *scan){
  * Checks whether a scan_entry->cur is >= scan_entry->start && <= scan_entry->end
  */
 
-int is_target_in_range(struct scan_entry *scan_entry){
+int is_target_in_range(struct scan_list *scan_list){
 	unsigned int i;
+	struct scan_entry	*scan_entry;
 
-	if(scan_list.ctarget >=scan_list.ntarget || scan_list.ctarget >= scan_list.maxtarget){
+	if(scan_list->ctarget >= scan_list->ntarget || scan_list->ctarget >= scan_list->maxtarget){
 		return(0);
 	}
 
+	scan_entry= scan_list->target[scan_list->ctarget];
+
 	for(i=0; i<=7; i++){
-		if( ntohs((scan_entry->cur).s6_addr16[i]) < ntohs((scan_entry->start).s6_addr16[i]) || \
-			( ntohs((scan_entry->cur).s6_addr16[i]) > ntohs((scan_entry->end).s6_addr16[i])) )
+		if( ntohs((scan_entry->cur).s6addr16[i]) < ntohs((scan_entry->start).s6addr16[i]) || \
+			( ntohs((scan_entry->cur).s6addr16[i]) > ntohs((scan_entry->end).s6addr16[i])) ){
 				return(0);
+			}
 	}
 
 	return(1);
@@ -1850,8 +2787,8 @@ int get_next_target(struct scan_list *scan_list){
 			Increment scan_entry according to scan_entry->start and scan_entry->end, starting with the low-order word
 		 */
 
-		if( ntohs((scan_list->target[scan_list->ctarget])->cur.s6_addr16[i]) >= \
-								ntohs((scan_list->target[scan_list->ctarget])->end.s6_addr16[i])){
+		if( ntohs((scan_list->target[scan_list->ctarget])->cur.s6addr16[i]) >= \
+								ntohs((scan_list->target[scan_list->ctarget])->end.s6addr16[i])){
 			if(i==0){
 				scan_list->ctarget++;
 
@@ -1863,7 +2800,7 @@ int get_next_target(struct scan_list *scan_list){
 				}
 			}
 
-			(scan_list->target[scan_list->ctarget])->cur.s6_addr16[i]= (scan_list->target[scan_list->ctarget])->start.s6_addr16[i];
+			(scan_list->target[scan_list->ctarget])->cur.s6addr16[i]= (scan_list->target[scan_list->ctarget])->start.s6addr16[i];
 
 		}
 		else{
@@ -1875,23 +2812,23 @@ int get_next_target(struct scan_list *scan_list){
 				If we're incrementing the lowest-order word, and the scan range is larger than MIN_INC_RANGE, we increment
 				the word by scan_list->inc. Otherwise, we increment the word by 1.
 			 */
-			if(i==7 && ( ntohs((scan_list->target[cind])->end.s6_addr16[7]) - ntohs( (scan_list->target[cind])->start.s6_addr16[7]) ) \
+			if(i==7 && ( ntohs((scan_list->target[cind])->end.s6addr16[7]) - ntohs( (scan_list->target[cind])->start.s6addr16[7]) ) \
 																	>= MIN_INC_RANGE ){
 
 				/* If the increment would exceed scan_entry->end, we make it "wrap around" */
-				if( ((unsigned int) ntohs((scan_list->target[cind])->cur.s6_addr16[7]) + scan_list->inc) > \
-							ntohs((scan_list->target[scan_list->ctarget])->end.s6_addr16[7]) ){
+				if( ((unsigned int) ntohs((scan_list->target[cind])->cur.s6addr16[7]) + scan_list->inc) > \
+							ntohs((scan_list->target[scan_list->ctarget])->end.s6addr16[7]) ){
 
-						(scan_list->target[cind])->cur.s6_addr16[i]= htons((u_int16_t)((unsigned int)
-																ntohs((scan_list->target[cind])->start.s6_addr16[i]) + \
-																( (unsigned int) ntohs((scan_list->target[cind])->cur.s6_addr16[i]) + \
-																 scan_list->inc - ntohs((scan_list->target[cind])->start.s6_addr16[i])) % \
-																( ntohs((scan_list->target[cind])->end.s6_addr16[i]) - \
-																ntohs((scan_list->target[cind])->start.s6_addr16[i]))));
+						(scan_list->target[cind])->cur.s6addr16[i]= htons((uint16_t)((unsigned int)
+																ntohs((scan_list->target[cind])->start.s6addr16[i]) + \
+																( (unsigned int) ntohs((scan_list->target[cind])->cur.s6addr16[i]) + \
+																 scan_list->inc - ntohs((scan_list->target[cind])->start.s6addr16[i])) % \
+																( ntohs((scan_list->target[cind])->end.s6addr16[i]) - \
+																ntohs((scan_list->target[cind])->start.s6addr16[i]))));
 				}
 				else{
 					/* Otherwise we simply increment the word with scan_list->inc */
-					scan_list->target[cind]->cur.s6_addr16[i] = htons(ntohs(scan_list->target[cind]->cur.s6_addr16[i]) + scan_list->inc);
+					scan_list->target[cind]->cur.s6addr16[i] = htons(ntohs(scan_list->target[cind]->cur.s6addr16[i]) + scan_list->inc);
 					return(1);
 				}
 			}
@@ -1901,11 +2838,11 @@ int get_next_target(struct scan_list *scan_list){
 				   we try to increment in by 1. If this would exceed scan_entry->end, we set it to scan_entry->start and cause the
 				   next word to be incremented
 				 */
-				if( ((unsigned int) ntohs((scan_list->target[cind])->cur.s6_addr16[i]) + 1) > ntohs(scan_list->target[cind]->end.s6_addr16[i])){
-					(scan_list->target[cind])->cur.s6_addr16[i]= (scan_list->target[cind])->start.s6_addr16[i];
+				if( ((unsigned int) ntohs((scan_list->target[cind])->cur.s6addr16[i]) + 1) > ntohs(scan_list->target[cind]->end.s6addr16[i])){
+					(scan_list->target[cind])->cur.s6addr16[i]= (scan_list->target[cind])->start.s6addr16[i];
 				}
 				else{
-					scan_list->target[cind]->cur.s6_addr16[i] = htons(ntohs(scan_list->target[cind]->cur.s6_addr16[i]) + 1);
+					scan_list->target[cind]->cur.s6addr16[i] = htons(ntohs(scan_list->target[cind]->cur.s6addr16[i]) + 1);
 					return(1);
 				}
 			}
@@ -1928,10 +2865,10 @@ int print_scan_entries(struct scan_list *scan){
 
 	for(i=0; i< scan->ntarget; i++){
 		for(j=0; j<8; j++){
-			if((scan->target[i])->start.s6_addr16[j] == (scan->target[i])->end.s6_addr16[j])
-				printf("%x", ntohs((scan->target[i])->start.s6_addr16[j]));
+			if((scan->target[i])->start.s6addr16[j] == (scan->target[i])->end.s6addr16[j])
+				printf("%x", ntohs((scan->target[i])->start.s6addr16[j]));
 			else
-				printf("%x-%x", ntohs((scan->target[i])->start.s6_addr16[j]), ntohs((scan->target[i])->end.s6_addr16[j]));
+				printf("%x-%x", ntohs((scan->target[i])->start.s6addr16[j]), ntohs((scan->target[i])->end.s6addr16[j]));
 
 			if(j<7)
 				printf(":");
@@ -1952,7 +2889,7 @@ int print_scan_entries(struct scan_list *scan){
 
 int load_ipv4mapped32_entries(struct scan_list *scan, struct scan_entry *dst, struct prefix4_entry *v4host){
 	unsigned int i;
-	u_int32_t	mask32;
+	uint32_t	mask32;
 
 	if(scan->ntarget >= scan->maxtarget){
 		return(0);
@@ -1964,16 +2901,16 @@ int load_ipv4mapped32_entries(struct scan_list *scan, struct scan_entry *dst, st
 	(scan->target[scan->ntarget])->start= dst->start;
 
 	for(i=4; i<=5; i++)
-		(scan->target[scan->ntarget])->start.s6_addr16[i]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[i]= htons(0);
 
-	(scan->target[scan->ntarget])->start.s6_addr16[6]= htons( (u_int16_t) (ntohl(v4host->ip.s_addr) >> 16));
-	(scan->target[scan->ntarget])->start.s6_addr16[7]= htons( (u_int16_t) (ntohl(v4host->ip.s_addr) & 0x0000ffff));
+	(scan->target[scan->ntarget])->start.s6addr16[6]= htons( (uint16_t) (ntohl(v4host->ip.s_addr) >> 16));
+	(scan->target[scan->ntarget])->start.s6addr16[7]= htons( (uint16_t) (ntohl(v4host->ip.s_addr) & 0x0000ffff));
 	(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
 
 	(scan->target[scan->ntarget])->end= dst->end;
 
 	for(i=4; i<=7; i++)
-		(scan->target[scan->ntarget])->end.s6_addr16[i]= (scan->target[scan->ntarget])->start.s6_addr16[i];
+		(scan->target[scan->ntarget])->end.s6addr16[i]= (scan->target[scan->ntarget])->start.s6addr16[i];
 
 	mask32= 0xffffffff;
 
@@ -1983,8 +2920,8 @@ int load_ipv4mapped32_entries(struct scan_list *scan, struct scan_entry *dst, st
 	for(i=0; i< v4host->len; i++)
 		mask32=mask32>>1;
 
-	(scan->target[scan->ntarget])->end.s6_addr16[6]= (scan->target[scan->ntarget])->end.s6_addr16[6] | htons( (u_int16_t)(mask32>>16));
-	(scan->target[scan->ntarget])->end.s6_addr16[7]= (scan->target[scan->ntarget])->end.s6_addr16[7] | htons((u_int16_t)(mask32 & 0x0000ffff));
+	(scan->target[scan->ntarget])->end.s6addr16[6]= (scan->target[scan->ntarget])->end.s6addr16[6] | htons( (uint16_t)(mask32>>16));
+	(scan->target[scan->ntarget])->end.s6addr16[7]= (scan->target[scan->ntarget])->end.s6addr16[7] | htons((uint16_t)(mask32 & 0x0000ffff));
 
 	scan->ntarget++;
 
@@ -2000,7 +2937,7 @@ int load_ipv4mapped32_entries(struct scan_list *scan, struct scan_entry *dst, st
 
 int load_ipv4mapped64_entries(struct scan_list *scan, struct scan_entry *dst, struct prefix4_entry *v4host){
 	unsigned int i;
-	u_int32_t	mask32;
+	uint32_t	mask32;
 
 	if(scan->ntarget >= scan->maxtarget){
 		return(0);
@@ -2011,16 +2948,16 @@ int load_ipv4mapped64_entries(struct scan_list *scan, struct scan_entry *dst, st
 
 	(scan->target[scan->ntarget])->start= dst->start;
 
-	(scan->target[scan->ntarget])->start.s6_addr16[4]= htons( (u_int16_t) (ntohl(v4host->ip.s_addr) >> 24));
-	(scan->target[scan->ntarget])->start.s6_addr16[5]= htons( ((u_int16_t) (ntohl(v4host->ip.s_addr) >> 16)) & 0x00ff);
-	(scan->target[scan->ntarget])->start.s6_addr16[6]= htons( (u_int16_t) ((ntohl(v4host->ip.s_addr) >> 8) & 0x000000ff));
-	(scan->target[scan->ntarget])->start.s6_addr16[7]= htons( (u_int16_t) (ntohl(v4host->ip.s_addr) & 0x000000ff));
+	(scan->target[scan->ntarget])->start.s6addr16[4]= htons( (uint16_t) (ntohl(v4host->ip.s_addr) >> 24));
+	(scan->target[scan->ntarget])->start.s6addr16[5]= htons( ((uint16_t) (ntohl(v4host->ip.s_addr) >> 16)) & 0x00ff);
+	(scan->target[scan->ntarget])->start.s6addr16[6]= htons( (uint16_t) ((ntohl(v4host->ip.s_addr) >> 8) & 0x000000ff));
+	(scan->target[scan->ntarget])->start.s6addr16[7]= htons( (uint16_t) (ntohl(v4host->ip.s_addr) & 0x000000ff));
 	(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
 
 	(scan->target[scan->ntarget])->end= dst->end;
 
 	for(i=4; i<=7; i++)
-		(scan->target[scan->ntarget])->end.s6_addr16[i]= (scan->target[scan->ntarget])->start.s6_addr16[i];
+		(scan->target[scan->ntarget])->end.s6addr16[i]= (scan->target[scan->ntarget])->start.s6addr16[i];
 
 	mask32= 0xffffffff;
 
@@ -2030,14 +2967,14 @@ int load_ipv4mapped64_entries(struct scan_list *scan, struct scan_entry *dst, st
 	for(i=0; i< v4host->len; i++)
 		mask32=mask32>>1;
 
-	(scan->target[scan->ntarget])->end.s6_addr16[4]= (scan->target[scan->ntarget])->end.s6_addr16[4] | htons( (u_int16_t)(mask32>>24));
-	(scan->target[scan->ntarget])->end.s6_addr16[5]= (scan->target[scan->ntarget])->end.s6_addr16[5] | htons( (u_int16_t)(mask32>>16 & 0x000000ff));
-	(scan->target[scan->ntarget])->end.s6_addr16[6]= (scan->target[scan->ntarget])->end.s6_addr16[6] | htons( (u_int16_t)(mask32>>8 & 0x000000ff));
-	(scan->target[scan->ntarget])->end.s6_addr16[7]= (scan->target[scan->ntarget])->end.s6_addr16[7] | htons((u_int16_t)(mask32 & 0x000000ff));
+	(scan->target[scan->ntarget])->end.s6addr16[4]= (scan->target[scan->ntarget])->end.s6addr16[4] | htons( (uint16_t)(mask32>>24));
+	(scan->target[scan->ntarget])->end.s6addr16[5]= (scan->target[scan->ntarget])->end.s6addr16[5] | htons( (uint16_t)(mask32>>16 & 0x000000ff));
+	(scan->target[scan->ntarget])->end.s6addr16[6]= (scan->target[scan->ntarget])->end.s6addr16[6] | htons( (uint16_t)(mask32>>8 & 0x000000ff));
+	(scan->target[scan->ntarget])->end.s6addr16[7]= (scan->target[scan->ntarget])->end.s6addr16[7] | htons((uint16_t)(mask32 & 0x000000ff));
 
 	for(i=4; i<=7; i++){
-		(scan->target[scan->ntarget])->start.s6_addr16[i]= htons( dec_to_hex(ntohs((scan->target[scan->ntarget])->start.s6_addr16[i])));
-		(scan->target[scan->ntarget])->end.s6_addr16[i]= htons( dec_to_hex(ntohs((scan->target[scan->ntarget])->end.s6_addr16[i])));
+		(scan->target[scan->ntarget])->start.s6addr16[i]= htons( dec_to_hex(ntohs((scan->target[scan->ntarget])->start.s6addr16[i])));
+		(scan->target[scan->ntarget])->end.s6addr16[i]= htons( dec_to_hex(ntohs((scan->target[scan->ntarget])->end.s6addr16[i])));
 	}
 
 	scan->ntarget++;
@@ -2123,22 +3060,22 @@ int load_knownprefix_entries(struct scan_list *scan_list, struct scan_list *pref
 
 					/* Check whether the start address is smaller than the end address */
 					for(i=0;i<7; i++)
-						if( ntohs((scan_list->target[scan_list->ntarget])->start.s6_addr16[i]) > 
-							ntohs((scan_list->target[scan_list->ntarget])->end.s6_addr16[i])){
+						if( ntohs((scan_list->target[scan_list->ntarget])->start.s6addr16[i]) > 
+							ntohs((scan_list->target[scan_list->ntarget])->end.s6addr16[i])){
 							if(verbose_f > 1)
 								puts("Error in Destination Address range: Start address larger than end address!");
 
 							return(0);
 						}
 
-					if(IN6_IS_ADDR_MULTICAST(&((scan_list->target[scan_list->ntarget])->start))){
+					if(IN6_IS_ADDR_MULTICAST(&((scan_list->target[scan_list->ntarget])->start.in6_addr))){
 						if(verbose_f > 1)
 							puts("scan6: Remote scan cannot target a multicast address");
 
 						return(0);
 					}
 
-					if(IN6_IS_ADDR_MULTICAST(&((scan_list->target[scan_list->ntarget])->end))){
+					if(IN6_IS_ADDR_MULTICAST(&((scan_list->target[scan_list->ntarget])->end.in6_addr))){
 						if(verbose_f > 1)
 							puts("scan6: Remote scan cannot target a multicast address");
 
@@ -2222,14 +3159,14 @@ int load_knownprefix_entries(struct scan_list *scan_list, struct scan_list *pref
 
 					prefix_to_scan(&prefix, prefix_list->target[prefix_list->ntarget]);
 
-					if(IN6_IS_ADDR_MULTICAST(&((prefix_list->target[prefix_list->ntarget])->start))){
+					if(IN6_IS_ADDR_MULTICAST(&((prefix_list->target[prefix_list->ntarget])->start.in6_addr))){
 						if(verbose_f > 1)
 							puts("scan6: Remote scan cannot target a multicast address");
 
 						return(0);
 					}
 
-					if(IN6_IS_ADDR_MULTICAST(&((prefix_list->target[prefix_list->ntarget])->end))){
+					if(IN6_IS_ADDR_MULTICAST(&((prefix_list->target[prefix_list->ntarget])->end.in6_addr))){
 						if(verbose_f > 1)
 							puts("scan6: Remote scan cannot target a multicast address");
 
@@ -2286,15 +3223,15 @@ int load_knowniid_entries(struct scan_list *scan, struct scan_list *prefix, stru
 
 			(scan->target[scan->ntarget])->start= (prefix->target[j])->start;
 
-			for(k=4; k<=7; k++)
-				(scan->target[scan->ntarget])->start.s6_addr16[k]= (iid->prefix[i])->ip6.s6_addr16[k];
+			for(k=2; k<=3; k++)
+				(scan->target[scan->ntarget])->start.in6_addr.s6_addr32[k]= (iid->prefix[i])->ip6.s6_addr32[k];
 
 			(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
 
 			(scan->target[scan->ntarget])->end= (prefix->target[j])->end;
 
-			for(k=4; k<=7; k++)
-				(scan->target[scan->ntarget])->end.s6_addr16[k]= (iid->prefix[i])->ip6.s6_addr16[k];
+			for(k=2; k<=3; k++)
+				(scan->target[scan->ntarget])->end.in6_addr.s6_addr32[k]= (iid->prefix[i])->ip6.s6_addr32[k];
 
 			scan->ntarget++;
 		}
@@ -2331,15 +3268,15 @@ int load_knowniidfile_entries(struct scan_list *scan, struct scan_list *prefix, 
 
 				(scan->target[scan->ntarget])->start= (prefix->target[i])->start;
 
-				for(j=4; j<=7; j++)
-					(scan->target[scan->ntarget])->start.s6_addr16[j]= iid.s6_addr16[j];
+				for(j=2; j<=3; j++)
+					(scan->target[scan->ntarget])->start.in6_addr.s6_addr32[j]= iid.s6_addr32[j];
 
 				(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
 
 				(scan->target[scan->ntarget])->end= (prefix->target[i])->end;
 
-				for(j=4; j<=7; j++)
-					(scan->target[scan->ntarget])->end.s6_addr16[j]= iid.s6_addr16[j];
+				for(j=2; j<=3; j++)
+					(scan->target[scan->ntarget])->end.in6_addr.s6_addr32[j]= iid.s6_addr32[j];
 
 				scan->ntarget++;
 			}
@@ -2369,7 +3306,7 @@ int load_knowniidfile_entries(struct scan_list *scan, struct scan_list *prefix, 
 int load_embeddedport_entries(struct scan_list *scan, struct scan_entry *dst){
 	unsigned int	i;
 
-	for(i=0; i < (sizeof(service_ports_hex)/sizeof(u_int16_t)); i++){
+	for(i=0; i < (sizeof(service_ports_hex)/sizeof(uint16_t)); i++){
 		if(scan->ntarget >= scan->maxtarget){
 			return(0);
 		}
@@ -2378,17 +3315,17 @@ int load_embeddedport_entries(struct scan_list *scan, struct scan_entry *dst){
 			return(0);
 
 		(scan->target[scan->ntarget])->start= dst->start;
-		(scan->target[scan->ntarget])->start.s6_addr16[4]= htons(0);
-		(scan->target[scan->ntarget])->start.s6_addr16[5]= htons(0);
-		(scan->target[scan->ntarget])->start.s6_addr16[6]= htons(0);
-		(scan->target[scan->ntarget])->start.s6_addr16[7]= htons(service_ports_hex[i]);
+		(scan->target[scan->ntarget])->start.s6addr16[4]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[5]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[6]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[7]= htons(service_ports_hex[i]);
 		(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
 
 		(scan->target[scan->ntarget])->end= dst->end;
-		(scan->target[scan->ntarget])->end.s6_addr16[4]= htons(0);
-		(scan->target[scan->ntarget])->end.s6_addr16[5]= htons(0);
-		(scan->target[scan->ntarget])->end.s6_addr16[6]= htons(EMBEDDED_PORT_2ND_WORD);
-		(scan->target[scan->ntarget])->end.s6_addr16[7]= htons(service_ports_hex[i]);
+		(scan->target[scan->ntarget])->end.s6addr16[4]= htons(0);
+		(scan->target[scan->ntarget])->end.s6addr16[5]= htons(0);
+		(scan->target[scan->ntarget])->end.s6addr16[6]= htons(EMBEDDED_PORT_2ND_WORD);
+		(scan->target[scan->ntarget])->end.s6addr16[7]= htons(service_ports_hex[i]);
 		scan->ntarget++;
 
 		if(scan->ntarget >= scan->maxtarget){
@@ -2399,21 +3336,21 @@ int load_embeddedport_entries(struct scan_list *scan, struct scan_entry *dst){
 			return(0);
 
 		(scan->target[scan->ntarget])->start= dst->start;
-		(scan->target[scan->ntarget])->start.s6_addr16[4]= htons(0);
-		(scan->target[scan->ntarget])->start.s6_addr16[5]= htons(0);
-		(scan->target[scan->ntarget])->start.s6_addr16[6]= htons(service_ports_hex[i]);
-		(scan->target[scan->ntarget])->start.s6_addr16[7]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[4]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[5]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[6]= htons(service_ports_hex[i]);
+		(scan->target[scan->ntarget])->start.s6addr16[7]= htons(0);
 		(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
 
 		(scan->target[scan->ntarget])->end= dst->end;
-		(scan->target[scan->ntarget])->end.s6_addr16[4]= htons(0);
-		(scan->target[scan->ntarget])->end.s6_addr16[5]= htons(0);
-		(scan->target[scan->ntarget])->end.s6_addr16[6]= htons(service_ports_hex[i]);
-		(scan->target[scan->ntarget])->end.s6_addr16[7]= htons(EMBEDDED_PORT_2ND_WORD);
+		(scan->target[scan->ntarget])->end.s6addr16[4]= htons(0);
+		(scan->target[scan->ntarget])->end.s6addr16[5]= htons(0);
+		(scan->target[scan->ntarget])->end.s6addr16[6]= htons(service_ports_hex[i]);
+		(scan->target[scan->ntarget])->end.s6addr16[7]= htons(EMBEDDED_PORT_2ND_WORD);
 		scan->ntarget++;
 	}
 
-	for(i=0; i < (sizeof(service_ports_dec)/sizeof(u_int16_t)); i++){
+	for(i=0; i < (sizeof(service_ports_dec)/sizeof(uint16_t)); i++){
 		if(scan->ntarget >= scan->maxtarget){
 			return(0);
 		}
@@ -2422,17 +3359,17 @@ int load_embeddedport_entries(struct scan_list *scan, struct scan_entry *dst){
 			return(0);
 
 		(scan->target[scan->ntarget])->start= dst->start;
-		(scan->target[scan->ntarget])->start.s6_addr16[4]= htons(0);
-		(scan->target[scan->ntarget])->start.s6_addr16[5]= htons(0);
-		(scan->target[scan->ntarget])->start.s6_addr16[6]= htons(0);
-		(scan->target[scan->ntarget])->start.s6_addr16[7]= htons(service_ports_dec[i]);
+		(scan->target[scan->ntarget])->start.s6addr16[4]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[5]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[6]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[7]= htons(service_ports_dec[i]);
 		(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
 
 		(scan->target[scan->ntarget])->end= dst->end;
-		(scan->target[scan->ntarget])->end.s6_addr16[4]= htons(0);
-		(scan->target[scan->ntarget])->end.s6_addr16[5]= htons(0);
-		(scan->target[scan->ntarget])->end.s6_addr16[6]= htons(EMBEDDED_PORT_2ND_WORD);
-		(scan->target[scan->ntarget])->end.s6_addr16[7]= htons(service_ports_dec[i]);
+		(scan->target[scan->ntarget])->end.s6addr16[4]= htons(0);
+		(scan->target[scan->ntarget])->end.s6addr16[5]= htons(0);
+		(scan->target[scan->ntarget])->end.s6addr16[6]= htons(EMBEDDED_PORT_2ND_WORD);
+		(scan->target[scan->ntarget])->end.s6addr16[7]= htons(service_ports_dec[i]);
 		scan->ntarget++;
 
 		if(scan->ntarget >= scan->maxtarget){
@@ -2443,17 +3380,17 @@ int load_embeddedport_entries(struct scan_list *scan, struct scan_entry *dst){
 			return(0);
 
 		(scan->target[scan->ntarget])->start= dst->start;
-		(scan->target[scan->ntarget])->start.s6_addr16[4]= htons(0);
-		(scan->target[scan->ntarget])->start.s6_addr16[5]= htons(0);
-		(scan->target[scan->ntarget])->start.s6_addr16[6]= htons(service_ports_dec[i]);
-		(scan->target[scan->ntarget])->start.s6_addr16[7]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[4]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[5]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[6]= htons(service_ports_dec[i]);
+		(scan->target[scan->ntarget])->start.s6addr16[7]= htons(0);
 		(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
 
 		(scan->target[scan->ntarget])->end= dst->end;
-		(scan->target[scan->ntarget])->end.s6_addr16[4]= htons(0);
-		(scan->target[scan->ntarget])->end.s6_addr16[5]= htons(0);
-		(scan->target[scan->ntarget])->end.s6_addr16[6]= htons(service_ports_dec[i]);
-		(scan->target[scan->ntarget])->end.s6_addr16[7]= htons(EMBEDDED_PORT_2ND_WORD);
+		(scan->target[scan->ntarget])->end.s6addr16[4]= htons(0);
+		(scan->target[scan->ntarget])->end.s6addr16[5]= htons(0);
+		(scan->target[scan->ntarget])->end.s6addr16[6]= htons(service_ports_dec[i]);
+		(scan->target[scan->ntarget])->end.s6addr16[7]= htons(EMBEDDED_PORT_2ND_WORD);
 		scan->ntarget++;
 	}
 
@@ -2480,16 +3417,16 @@ int load_lowbyte_entries(struct scan_list *scan, struct scan_entry *dst){
 	(scan->target[scan->ntarget])->start= dst->start;
 
 	for(i=4; i<=7; i++)
-		(scan->target[scan->ntarget])->start.s6_addr16[i]= htons(0);
+		(scan->target[scan->ntarget])->start.s6addr16[i]= htons(0);
 
 	(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
 	(scan->target[scan->ntarget])->end= dst->end;
 
 	for(i=4; i<=5; i++)
-		(scan->target[scan->ntarget])->end.s6_addr16[i]= htons(0);
+		(scan->target[scan->ntarget])->end.s6addr16[i]= htons(0);
 
-	(scan->target[scan->ntarget])->end.s6_addr16[6]= htons(LOW_BYTE_2ND_WORD_UPPER);
-	(scan->target[scan->ntarget])->end.s6_addr16[7]= htons(LOW_BYTE_1ST_WORD_UPPER);
+	(scan->target[scan->ntarget])->end.s6addr16[6]= htons(LOW_BYTE_2ND_WORD_UPPER);
+	(scan->target[scan->ntarget])->end.s6addr16[7]= htons(LOW_BYTE_1ST_WORD_UPPER);
 	scan->ntarget++;
 
 	return(1);
@@ -2515,20 +3452,20 @@ int load_oui_entries(struct scan_list *scan, struct scan_entry *dst, struct ethe
 		return(0);
 	}
 
-	generate_slaac_address(&(dst->start), oui, &((scan->target[scan->ntarget])->start));
+	generate_slaac_address(&(dst->start.in6_addr), oui, &((scan->target[scan->ntarget])->start.in6_addr));
 	(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
 
 	for(i=0; i<4; i++)
-		(scan->target[scan->ntarget])->end.s6_addr16[i]= dst->end.s6_addr16[i];
+		(scan->target[scan->ntarget])->end.s6addr16[i]= dst->end.s6addr16[i];
 
 	for(i=4; i<=7; i++)
-		(scan->target[scan->ntarget])->end.s6_addr16[i]= (scan->target[scan->ntarget])->start.s6_addr16[i];
+		(scan->target[scan->ntarget])->end.s6addr16[i]= (scan->target[scan->ntarget])->start.s6addr16[i];
 
 	/*
 	   The three low-order bytes must vary from 0x000000 to 0xffffff
 	 */
-	(scan->target[scan->ntarget])->end.s6_addr16[6]= (scan->target[scan->ntarget])->end.s6_addr16[6] | htons(0x00ff);
-	(scan->target[scan->ntarget])->end.s6_addr16[7]= (scan->target[scan->ntarget])->end.s6_addr16[7] | htons(0xffff);
+	(scan->target[scan->ntarget])->end.s6addr16[6]= (scan->target[scan->ntarget])->end.s6addr16[6] | htons(0x00ff);
+	(scan->target[scan->ntarget])->end.s6addr16[7]= (scan->target[scan->ntarget])->end.s6addr16[7] | htons(0xffff);
 
 	scan->ntarget++;
 	return(1);
@@ -2543,7 +3480,7 @@ int load_oui_entries(struct scan_list *scan, struct scan_entry *dst, struct ethe
 
 int load_vm_entries(struct scan_list *scan, struct scan_entry *dst, struct prefix4_entry *v4host){
 	unsigned int 		i;
-	u_int32_t			mask32;
+	uint32_t			mask32;
 	struct ether_addr 	ether;
 
 	/* VirtualBOX */
@@ -2565,18 +3502,18 @@ int load_vm_entries(struct scan_list *scan, struct scan_entry *dst, struct prefi
 			return(0);
 		}
 
-		generate_slaac_address(&(dst->start), &ether, &((scan->target[scan->ntarget])->start));
+		generate_slaac_address(&(dst->start.in6_addr), &ether, &((scan->target[scan->ntarget])->start.in6_addr));
 		(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
 		(scan->target[scan->ntarget])->end= dst->end;
 
 		for(i=4; i<=7; i++)
-			(scan->target[scan->ntarget])->end.s6_addr16[i]= (scan->target[scan->ntarget])->start.s6_addr16[i];
+			(scan->target[scan->ntarget])->end.s6addr16[i]= (scan->target[scan->ntarget])->start.s6addr16[i];
 
 		/*
 		   The three low-order bytes must vary from 0x000000 to 0xffffff
 		 */
-		(scan->target[scan->ntarget])->end.s6_addr16[6]= (scan->target[scan->ntarget])->end.s6_addr16[6] | htons(0x00ff);
-		(scan->target[scan->ntarget])->end.s6_addr16[7]= (scan->target[scan->ntarget])->end.s6_addr16[7] | htons(0xffff);
+		(scan->target[scan->ntarget])->end.s6addr16[6]= (scan->target[scan->ntarget])->end.s6addr16[6] | htons(0x00ff);
+		(scan->target[scan->ntarget])->end.s6addr16[7]= (scan->target[scan->ntarget])->end.s6addr16[7] | htons(0xffff);
 		scan->ntarget++;
 	}
 
@@ -2598,12 +3535,12 @@ int load_vm_entries(struct scan_list *scan, struct scan_entry *dst, struct prefi
 			return(0);
 		}
 
-		generate_slaac_address(&(dst->start), &ether, &((scan->target[scan->ntarget])->start));
+		generate_slaac_address(&(dst->start.in6_addr), &ether, &((scan->target[scan->ntarget])->start.in6_addr));
 		(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
 		(scan->target[scan->ntarget])->end= dst->end;
 
 		for(i=4; i<=7; i++)
-			(scan->target[scan->ntarget])->end.s6_addr16[i]= (scan->target[scan->ntarget])->start.s6_addr16[i];
+			(scan->target[scan->ntarget])->end.s6addr16[i]= (scan->target[scan->ntarget])->start.s6addr16[i];
 
 
 		/*
@@ -2621,21 +3558,21 @@ int load_vm_entries(struct scan_list *scan, struct scan_entry *dst, struct prefi
 				mask32= 0;
 			}
 
-			(scan->target[scan->ntarget])->start.s6_addr16[6]= (scan->target[scan->ntarget])->start.s6_addr16[6] | \
+			(scan->target[scan->ntarget])->start.s6addr16[6]= (scan->target[scan->ntarget])->start.s6addr16[6] | \
 															htons((ntohl(v4host->ip.s_addr) & 0x0000ff00)>>8);
-			(scan->target[scan->ntarget])->start.s6_addr16[7]= (scan->target[scan->ntarget])->start.s6_addr16[7] | \
+			(scan->target[scan->ntarget])->start.s6addr16[7]= (scan->target[scan->ntarget])->start.s6addr16[7] | \
 															htons((ntohl(v4host->ip.s_addr) & 0x000000ff)<<8);
 
-			(scan->target[scan->ntarget])->end.s6_addr16[6]= (scan->target[scan->ntarget])->end.s6_addr16[6] | \
+			(scan->target[scan->ntarget])->end.s6addr16[6]= (scan->target[scan->ntarget])->end.s6addr16[6] | \
 															htons((ntohl(v4host->ip.s_addr) & 0x0000ff00)>>8) | \
 															htonl((mask32 & 0x0000ff00)>>8);
-			(scan->target[scan->ntarget])->end.s6_addr16[7]= (scan->target[scan->ntarget])->end.s6_addr16[7] | \
+			(scan->target[scan->ntarget])->end.s6addr16[7]= (scan->target[scan->ntarget])->end.s6addr16[7] | \
 															htons((ntohl(v4host->ip.s_addr) & 0x000000ff)<<8) | \
 															htonl((mask32 & 0x000000ff)<<8) | htons(0x00ff);
 		}
 		else{
-			(scan->target[scan->ntarget])->end.s6_addr16[6]= (scan->target[scan->ntarget])->end.s6_addr16[6] | htons(0x00ff);
-			(scan->target[scan->ntarget])->end.s6_addr16[7]= (scan->target[scan->ntarget])->end.s6_addr16[7] | htons(0xffff);
+			(scan->target[scan->ntarget])->end.s6addr16[6]= (scan->target[scan->ntarget])->end.s6addr16[6] | htons(0x00ff);
+			(scan->target[scan->ntarget])->end.s6addr16[7]= (scan->target[scan->ntarget])->end.s6addr16[7] | htons(0xffff);
 		}
 
 		scan->ntarget++;
@@ -2659,18 +3596,18 @@ int load_vm_entries(struct scan_list *scan, struct scan_entry *dst, struct prefi
 			return(0);
 		}
 
-		generate_slaac_address(&(dst->start), &ether, &((scan->target[scan->ntarget])->start));
+		generate_slaac_address(&(dst->start.in6_addr), &ether, &((scan->target[scan->ntarget])->start.in6_addr));
 		(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
 		(scan->target[scan->ntarget])->end= dst->end;
 
 		for(i=4; i<=7; i++)
-			(scan->target[scan->ntarget])->end.s6_addr16[i]= (scan->target[scan->ntarget])->start.s6_addr16[i];
+			(scan->target[scan->ntarget])->end.s6addr16[i]= (scan->target[scan->ntarget])->start.s6addr16[i];
 
 		/*
 		   The three low-order bytes must vary from 0x000000 to 0x3fffff
 		 */
-		(scan->target[scan->ntarget])->end.s6_addr16[6]= (scan->target[scan->ntarget])->end.s6_addr16[6] | htons(0x003f);
-		(scan->target[scan->ntarget])->end.s6_addr16[7]= (scan->target[scan->ntarget])->end.s6_addr16[6] | htons(0xffff);
+		(scan->target[scan->ntarget])->end.s6addr16[6]= (scan->target[scan->ntarget])->end.s6addr16[6] | htons(0x003f);
+		(scan->target[scan->ntarget])->end.s6addr16[7]= (scan->target[scan->ntarget])->end.s6addr16[6] | htons(0xffff);
 
 		scan->ntarget++;
 	}
@@ -2731,7 +3668,7 @@ int load_vendor_entries(struct scan_list *scan, struct scan_entry *dst, char *ve
 		if( (( (char *)line + lines) - charptr) >= OUI_HEX_STRING_SIZE){
 
 			/* If we find the "(hex)" string, we must skip it */
-			if( bcmp(oui_hex_string, charptr, OUI_HEX_STRING_SIZE) == 0)
+			if( memcmp(oui_hex_string, charptr, OUI_HEX_STRING_SIZE) == 0)
 				charptr+= OUI_HEX_STRING_SIZE;
 
 			/* Now we mst skip any whitespaces between the "(hex)" string and the vendor name */
@@ -2745,7 +3682,7 @@ int load_vendor_entries(struct scan_list *scan, struct scan_entry *dst, char *ve
 
 		if(match_strings(vendor, charptr)){
 			/* Copy the actual OUI to our array */
-			bcopy(line, oui_ascii, 8);
+			memcpy(oui_ascii, line, 8);
 
 			/* Patch the dashes with colons (i.e., s/-/:/ */
 			oui_ascii[2]=':';
@@ -2815,15 +3752,15 @@ int load_vendor_entries(struct scan_list *scan, struct scan_entry *dst, char *ve
 			return(0);
 		}
 
-		generate_slaac_address(&(dst->start), &oui_list[i], &((scan->target[scan->ntarget])->start));
+		generate_slaac_address(&(dst->start.in6_addr), &oui_list[i], &((scan->target[scan->ntarget])->start.in6_addr));
 		(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
-		generate_slaac_address(&(dst->end), &oui_list[i], &((scan->target[scan->ntarget])->end));
+		generate_slaac_address(&(dst->end.in6_addr), &oui_list[i], &((scan->target[scan->ntarget])->end.in6_addr));
 
 		/*
 		   The three low-order bytes must vary from 0x000000 to 0xffffff
 		 */
-		(scan->target[scan->ntarget])->end.s6_addr16[6]= (scan->target[scan->ntarget])->end.s6_addr16[6] | htons(0x00ff);
-		(scan->target[scan->ntarget])->end.s6_addr16[7]= (scan->target[scan->ntarget])->end.s6_addr16[6] | htons(0xffff);
+		(scan->target[scan->ntarget])->end.s6addr16[6]= (scan->target[scan->ntarget])->end.s6addr16[6] | htons(0x00ff);
+		(scan->target[scan->ntarget])->end.s6addr16[7]= (scan->target[scan->ntarget])->end.s6addr16[6] | htons(0xffff);
 
 		scan->ntarget++;
 	}
@@ -2887,8 +3824,141 @@ int load_bruteforce_entries(struct scan_list *scan, struct scan_entry *dst){
 
 	*scan->target[scan->ntarget]= *dst;
 	scan->ntarget++;
-
 	return(1);
+}
+
+
+/*
+ * Function: load_smart_entries()
+ *
+ * Loads targets based on IID type
+ */
+
+int load_smart_entries(struct scan_list *scan, struct scan_list *smart){
+	struct decode6		decode;
+	unsigned int		i, j;
+
+	for(i=0; i < smart->ntarget; i++){
+		decode.ip6= (smart->target[i])->start.in6_addr;
+		decode_ipv6_address(&decode);
+
+		if(scan->ntarget >= scan->maxtarget)
+			return(FALSE);
+
+		if( (scan->target[scan->ntarget]= malloc(sizeof(struct scan_entry))) == NULL){
+			if(verbose_f)
+				puts("scans: malloc(): Not enough memory");
+
+			return(FALSE);
+		}
+
+		*(scan->target[scan->ntarget])= *(smart->target[i]);
+
+		switch(decode.iidtype){
+			case IID_MACDERIVED:
+				(scan->target[scan->ntarget])->start.s6addr32[3]= (scan->target[scan->ntarget])->start.s6addr32[3] & htonl(0xff000000);
+				(scan->target[scan->ntarget])->end= (scan->target[scan->ntarget])->start;
+				(scan->target[scan->ntarget])->end.s6addr32[3]= (scan->target[scan->ntarget])->end.s6addr32[3] | htonl(0x00ffffff);
+				(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
+				scan->ntarget++;
+				break;
+
+			case IID_ISATAP:
+				(scan->target[scan->ntarget])->start.s6addr32[3]= (scan->target[scan->ntarget])->start.s6addr32[3] & htonl(0xffff0000);
+				(scan->target[scan->ntarget])->end= (scan->target[scan->ntarget])->start;
+				(scan->target[scan->ntarget])->end.s6addr32[3]= (scan->target[scan->ntarget])->end.s6addr32[3] | htonl(0x0000ffff);
+				(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
+				scan->ntarget++;
+				break;
+
+			case IID_LOWBYTE:
+			case IID_EMBEDDEDPORT:
+			case IID_EMBEDDEDPORTREV:
+			case IID_UNSPECIFIED:
+			case IID_RANDOM:
+				/*
+				   Embedded-port addresses are rather unlikely, and usully a false-positive resulting from low-byte
+				   addresses. Hence we scan for low-byte addresses when "embedded port" addresses are detected.
+				 */
+
+				for(j=4; j<=7; j++)
+					(scan->target[scan->ntarget])->start.s6addr16[j]= 0;
+
+				(scan->target[scan->ntarget])->end= (scan->target[scan->ntarget])->start;
+				(scan->target[scan->ntarget])->end.s6addr16[6]= htons(LOW_BYTE_2ND_WORD_UPPER);
+				(scan->target[scan->ntarget])->end.s6addr16[7]= htons(LOW_BYTE_1ST_WORD_UPPER);
+				(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
+				scan->ntarget++;
+				break;
+
+			case IID_EMBEDDEDIPV4:
+				switch(decode.iidsubtype){
+					case IID_EMBEDDEDIPV4_32:
+						(scan->target[scan->ntarget])->start.s6addr32[2]= htonl(0x00000000);
+						(scan->target[scan->ntarget])->start.s6addr32[3]= (scan->target[scan->ntarget])->start.s6addr32[3] & htonl(0xffff0000);
+						(scan->target[scan->ntarget])->end= (scan->target[scan->ntarget])->start;
+						(scan->target[scan->ntarget])->end.s6addr32[3]= (scan->target[scan->ntarget])->end.s6addr32[3] | htonl(0x0000ffff);
+						(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
+						scan->ntarget++;
+						break;
+
+					case IID_EMBEDDEDIPV4_64:
+						(scan->target[scan->ntarget])->start.s6addr32[2]= (scan->target[scan->ntarget])->start.s6addr32[2] & htonl(0x00ff00ff);
+						(scan->target[scan->ntarget])->start.s6addr32[3]= htonl(0x00000000);
+						(scan->target[scan->ntarget])->end= (scan->target[scan->ntarget])->start;
+						(scan->target[scan->ntarget])->end.s6addr32[3]= (scan->target[scan->ntarget])->end.s6addr32[3] | htonl(0x00ff00ff);
+						(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
+						scan->ntarget++;
+						break;
+				}
+
+				break;
+
+			case IID_PATTERN_BYTES:
+				(scan->target[scan->ntarget])->end= (scan->target[scan->ntarget])->start;
+
+				for(j=8; j<=16; j++)
+					(scan->target[scan->ntarget])->end.s6addr[j]= ((scan->target[scan->ntarget])->start.s6addr[j])?0xff:0x00;
+
+				for(j=8; j<=16; j++)
+					(scan->target[scan->ntarget])->start.s6addr[j]= 0x00;
+
+				(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
+				scan->ntarget++;
+				break;
+
+			case IID_TEREDO_RFC5991:
+			case IID_TEREDO_RFC4380:
+			case IID_TEREDO_UNKNOWN:
+				for(j=8; j<=11; j++)
+					(scan->target[scan->ntarget])->start.s6addr[j]= 0x00;
+
+				(scan->target[scan->ntarget])->end= (scan->target[scan->ntarget])->start;
+
+				(scan->target[scan->ntarget])->start.s6addr[8]= 0xbc;
+
+				for(j=9; j<=11; j++)
+					(scan->target[scan->ntarget])->start.s6addr[8]= 0xff;
+
+				(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
+				scan->ntarget++;
+				break;
+
+			default:
+				/* By default we scan for low-byte-addresses (same code as above) */
+				for(j=8; j<=16; j++)
+					(scan->target[scan->ntarget])->start.s6addr[j]= 0x00;
+
+				for(j=8; j<=16; j++)
+					(scan->target[scan->ntarget])->end.s6addr[j]= 0xff;
+
+				(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
+				scan->ntarget++;
+				break;
+		}
+	}
+
+	return(TRUE);
 }
 
 
@@ -2899,29 +3969,28 @@ int load_bruteforce_entries(struct scan_list *scan, struct scan_entry *dst){
  */
 
 void prefix_to_scan(struct prefix_entry *pref, struct scan_entry *scan){
-	u_int16_t mask;
-	u_int8_t words;	
+	uint32_t mask;
+	uint8_t words;	
 	unsigned int i;
 
-	sanitize_ipv6_prefix(&(pref->ip6), pref->len);
-	scan->start= pref->ip6;
-	scan->cur= scan->start;
-
-	words= pref->len/16;
+	scan->start.in6_addr= pref->ip6;
+	scan->cur.in6_addr= pref->ip6;
+	words= pref->len/32;
 
 	for(i=0; i< words; i++)
-		(scan->end).s6_addr16[i]= (pref->ip6).s6_addr16[i];
+		(scan->end).in6_addr.s6_addr32[i]= (pref->ip6).s6_addr32[i];
 
-	for(i= (words+1); i<8; i++){
-		(scan->end).s6_addr16[i]= htons(0xffff);
+	for(i= (words+1); i<4; i++){
+		(scan->end).in6_addr.s6_addr32[i]= htonl(0xffffffff);
 	}
 
-	mask=0xffff;
+	mask=0xffffffff;
 
-	for(i=0; i< (pref->len % 16); i++)
+	for(i=0; i< (pref->len % 32); i++)
 		mask= mask>>1;
 
-	(scan->end).s6_addr16[words]= (scan->start).s6_addr16[words] | htons(mask);
+	if(pref->len % 32)
+		(scan->end).in6_addr.s6_addr32[words]= (scan->start).in6_addr.s6_addr32[words] | htonl(mask);
 }
 
 
@@ -2934,7 +4003,7 @@ void prefix_to_scan(struct prefix_entry *pref, struct scan_entry *scan){
  */
 
 void usage(void){
-	puts("usage: scan6 -i INTERFACE (-L | -d) [-s SRC_ADDR[/LEN] | -f] \n"
+	puts("usage: scan6 (-L | -d) [-i INTERFACE] [-s SRC_ADDR[/LEN] | -f] \n"
 	     "       [-S LINK_SRC_ADDR | -F] [-p PROBE_TYPE] [-Z PAYLOAD_SIZE] [-o SRC_PORT]\n"
 	     "       [-a DST_PORT] [-X TCP_FLAGS] [-P ADDRESS_TYPE] [-q] [-e] [-t]\n"
 	     "       [-x RETRANS] [-o TIMEOUT] [-V VM_TYPE] [-b] [-B ENCODING] [-g]\n"
@@ -2952,7 +4021,7 @@ void usage(void){
 
 void print_help(void){
 	puts(SI6_TOOLKIT);
-	puts( "scan6: An advanced IPv6 Address Scanning tool\n");
+	puts( "scan6: An advanced IPv6 scanning tool\n");
 	usage();
     
 	puts("\nOPTIONS:\n"
@@ -2961,7 +4030,9 @@ void print_help(void){
 	     "  --dst-address, -d           IPv6 Destination Range or Prefix\n"
 	     "  --prefixes-file, -m         Prefixes file\n"
 	     "  --link-src-address, -S      Link-layer Destination Address\n"
-	     "  --probe-type, -p            Probe type {echo, unrec, all}\n"
+	     "  --probe-type, -p            Probe type for host scanning {echo, unrec, all}\n"
+	     "  --port-scan, -j             Port scan type and range {tcp,udp}:port_low[-port_hi]\n"
+	     "  --tcp-scan-type, -G         TCP port-scanning type {syn,fin,null,xmas,ack}\n"
 	     "  --payload-size, -Z          TCP/UDP Payload Size\n"
 	     "  --src-port, -o              TCP/UDP Source Port\n"
 	     "  --dst-port, -a              TCP/UDP Destination Port\n"
@@ -3011,44 +4082,65 @@ int send_probe_remote(struct iface_data *idata, struct scan_list *scan, struct i
 	unsigned int 				i;
 	struct ether_header			*ether;
 	struct dlt_null				*dlt_null;
+#if defined(__linux__)
+	struct sll_linux		*sll_linux;
+#endif
 	unsigned char 				*v6buffer;
 	struct ip6_hdr				*ipv6;
 	struct tcp_hdr				*tcp;
 	struct ip6_dest				*destopth;
 	struct ip6_option			*opt;
-	u_int32_t					*uint32;
+	uint32_t					*uint32;
 
-	/* max_packet_size holds is equal to the link MTU, since the tool doesn't support packets larger than the link MTU */
-	max_packet_size = idata->mtu;
 	ether = (struct ether_header *) buffer;
 	dlt_null= (struct dlt_null *) buffer;
+#if defined(__linux__)
+	sll_linux= (struct sll_linux *) buffer;
+#endif
 	v6buffer = buffer + idata->linkhsize;
 	ipv6 = (struct ip6_hdr *) v6buffer;
 
-	if(idata->type == DLT_EN10MB && !loopback_f){
-		ether->src = idata->ether;
+	if(idata->type == DLT_EN10MB){
+		ether->ether_type = htons(ETHERTYPE_IPV6);
 
-		if(!onlink_f){
-			ether->dst = idata->nhhaddr;
-		}else{
-			if(ipv6_to_ether(idata->pfd, idata, &(scan->target[scan->ctarget])->cur, &(idata->hdstaddr)) != 1){
-				return(1);
+		if(!(idata->flags & IFACE_LOOPBACK)){
+			ether->src = idata->ether;
+
+			if(!onlink_f){
+				ether->dst = idata->nhhaddr;
+			}else{
+				if(ipv6_to_ether(idata->pfd, idata, &(scan->target[scan->ctarget])->cur.in6_addr, &(idata->hdstaddr)) != 1){
+					return(1);
+				}
 			}
 		}
-
-		ether->ether_type = htons(ETHERTYPE_IPV6);
 	}
 	else if(idata->type == DLT_NULL){
 		dlt_null->family= PF_INET6;
 	}
+#if defined (__OpenBSD__)
+	else if(idata->type == DLT_LOOP){
+		dlt_null->family= htonl(PF_INET6);
+	}
+#elif defined(__linux__)
+	else if(idata->type == DLT_LINUX_SLL){
+		sll_linux->sll_pkttype= htons(0x0004);
+		sll_linux->sll_hatype= htons(0xffff);
+		sll_linux->sll_halen= htons(0x0000);
+		sll_linux->sll_protocol= htons(ETHERTYPE_IPV6);
+	}
+#endif
 
 	ipv6->ip6_flow=0;
 	ipv6->ip6_vfc= 0x60;
 	ipv6->ip6_hlim= 255;
 
-	ipv6->ip6_src= idata->srcaddr_f?(*srcaddr):*sel_src_addr_ra(idata, &((scan->target[scan->ctarget])->cur));
-	ipv6->ip6_dst= (scan->target[scan->ctarget])->cur;
+	ipv6->ip6_src= idata->srcaddr_f?(*srcaddr):*sel_src_addr_ra(idata, &((scan->target[scan->ctarget])->cur.in6_addr));
+	ipv6->ip6_dst= (scan->target[scan->ctarget])->cur.in6_addr;
 
+#ifdef DEBUG
+print_ipv6_address("Direccion actual:", &((scan->target[scan->ctarget])->cur.in6_addr));
+#endif
 	prev_nh = (unsigned char *) &(ipv6->ip6_nxt);
 
 	ptr = (unsigned char *) v6buffer + MIN_IPV6_HLEN;
@@ -3073,8 +4165,8 @@ int send_probe_remote(struct iface_data *idata, struct scan_list *scan, struct i
 			ptr = ptr+ sizeof(struct icmp6_hdr);
 
 			for(i=0; i<(ICMPV6_ECHO_PAYLOAD_SIZE>>2); i++){
-				*(u_int32_t *)ptr = random();
-				ptr += sizeof(u_int32_t);
+				*(uint32_t *)ptr = random();
+				ptr += sizeof(uint32_t);
 			}
 
 			ipv6->ip6_plen = htons((ptr - v6buffer) - MIN_IPV6_HLEN);
@@ -3102,7 +4194,7 @@ int send_probe_remote(struct iface_data *idata, struct scan_list *scan, struct i
 			opt->ip6o_len= 4;
 
 			ptr= ptr + 2;
-			uint32 = (u_int32_t *) ptr;
+			uint32 = (uint32_t *) ptr;
 			*uint32 = random();
 
 			ptr= ptr +4;
@@ -3115,8 +4207,8 @@ int send_probe_remote(struct iface_data *idata, struct scan_list *scan, struct i
 			ptr = ptr+ sizeof(struct icmp6_hdr);
 
 			for(i=0; i<(ICMPV6_ECHO_PAYLOAD_SIZE>>2); i++){
-				*(u_int32_t *)ptr = random();
-				ptr += sizeof(u_int32_t);
+				*(uint32_t *)ptr = random();
+				ptr += sizeof(uint32_t);
 			}
 
 			ipv6->ip6_plen = htons((ptr - v6buffer) - MIN_IPV6_HLEN);
@@ -3127,7 +4219,7 @@ int send_probe_remote(struct iface_data *idata, struct scan_list *scan, struct i
 		case PROBE_TCP:
 			*prev_nh = IPPROTO_TCP;
 
-			if( (ptr+sizeof(struct tcp_hdr)) > (v6buffer + max_packet_size)){
+			if( (ptr+sizeof(struct tcp_hdr)) > (v6buffer + idata->max_packet_size)){
 				if(idata->verbose_f)
 					puts("Packet Too Large while inserting TCP header");
 
@@ -3135,7 +4227,7 @@ int send_probe_remote(struct iface_data *idata, struct scan_list *scan, struct i
 			}
 
 			tcp = (struct tcp_hdr *) ptr;
-			bzero(tcp, sizeof(struct tcp_hdr));
+			memset(tcp, 0, sizeof(struct tcp_hdr));
 
 			if(srcport_f)
 				tcp->th_sport= htons(srcport);
@@ -3163,19 +4255,19 @@ int send_probe_remote(struct iface_data *idata, struct scan_list *scan, struct i
 			tcp->th_off= sizeof(struct tcp_hdr) >> 2;
 			ptr+= tcp->th_off << 2;
 
-			if( (ptr + rhbytes) > v6buffer+max_packet_size){
+			if( (ptr + rhbytes) > v6buffer+idata->max_packet_size){
 				puts("Packet Too Large while inserting TCP segment");
 				exit(EXIT_FAILURE);
 			}
 
 			while(rhbytes>=4){
-				*(u_int32_t *)ptr = random();
-				ptr += sizeof(u_int32_t);
-				rhbytes -= sizeof(u_int32_t);
+				*(uint32_t *)ptr = random();
+				ptr += sizeof(uint32_t);
+				rhbytes -= sizeof(uint32_t);
 			}
 
 			while(rhbytes>0){
-				*(u_int8_t *) ptr= (u_int8_t) random();
+				*(uint8_t *) ptr= (uint8_t) random();
 				ptr++;
 				rhbytes--;
 			}
@@ -3186,15 +4278,21 @@ int send_probe_remote(struct iface_data *idata, struct scan_list *scan, struct i
 			break;
 	}
 
+#ifdef DEBUG
+puts("In send_probe_remote(), prior to send");
+#endif
 	if((nw=pcap_inject(idata->pfd, buffer, ptr - buffer)) ==  -1){
-		if(idata->verbose_f>1)
+		if(idata->verbose_f)
 			printf("pcap_inject(): %s\n", pcap_geterr(idata->pfd));
 
 		return(0);
 	}
+#ifdef DEBUG
+puts("In send_probe_remote(), after to send");
+#endif
 
 	if(nw != (ptr-buffer)){
-		if(idata->verbose_f>1)
+		if(idata->verbose_f)
 			printf("pcap_inject(): only wrote %lu bytes (rather than %lu bytes)\n", (LUI) nw, \
 																			(LUI) (ptr-buffer));
 		return(0);
@@ -3202,6 +4300,211 @@ int send_probe_remote(struct iface_data *idata, struct scan_list *scan, struct i
 
 	return(1);
 }
+
+
+/*
+ * Function: send_pscan_probe()
+ *
+ * Sends a probe packet to a target port
+ */
+
+int send_pscan_probe(struct iface_data *idata, struct port_list *port_list, struct in6_addr *srcaddr, unsigned char type){
+	unsigned char				*ptr;
+	struct ether_header			*ether;
+	struct dlt_null				*dlt_null;
+#if defined(__linux__)
+	struct sll_linux		*sll_linux;
+#endif
+	unsigned char 				*v6buffer;
+	struct ip6_hdr				*ipv6;
+	struct tcp_hdr				*tcp;
+	struct udp_hdr				*udp;
+	unsigned int				rhleft;
+
+	ether = (struct ether_header *) buffer;
+	dlt_null= (struct dlt_null *) buffer;
+#if defined(__linux__)
+	sll_linux= (struct sll_linux *) buffer;
+#endif
+	v6buffer = buffer + idata->linkhsize;
+	ipv6 = (struct ip6_hdr *) v6buffer;
+
+	if(idata->type == DLT_EN10MB){
+		ether->ether_type = htons(ETHERTYPE_IPV6);
+
+		if(!(idata->flags & IFACE_LOOPBACK)){
+			ether->src = idata->ether;
+
+			if(!onlink_f){
+				ether->dst = idata->nhhaddr;
+			}else{
+				if(ipv6_to_ether(idata->pfd, idata, &(idata->dstaddr), &(idata->hdstaddr)) != 1){
+					return(1);
+				}
+			}
+		}
+	}
+	else if(idata->type == DLT_NULL){
+		dlt_null->family= PF_INET6;
+	}
+#if defined (__OpenBSD__)
+	else if(idata->type == DLT_LOOP){
+		dlt_null->family= htonl(PF_INET6);
+	}
+#elif defined(__linux__)
+	else if(idata->type == DLT_LINUX_SLL){
+		sll_linux->sll_pkttype= htons(0x0004);
+		sll_linux->sll_hatype= htons(0xffff);
+		sll_linux->sll_halen= htons(0x0000);
+		sll_linux->sll_protocol= htons(ETHERTYPE_IPV6);
+	}
+#endif
+
+	ipv6->ip6_flow=0;
+	ipv6->ip6_vfc= 0x60;
+	ipv6->ip6_hlim= 255;
+
+	ipv6->ip6_src= idata->srcaddr;
+	ipv6->ip6_dst= idata->dstaddr;
+	prev_nh = (unsigned char *) &(ipv6->ip6_nxt);
+
+	ptr = (unsigned char *) v6buffer + MIN_IPV6_HLEN;
+
+	switch(type){
+		case IPPROTO_TCP:
+			*prev_nh = IPPROTO_TCP;
+
+			if( (ptr+sizeof(struct tcp_hdr)) > (v6buffer + idata->max_packet_size)){
+				if(idata->verbose_f)
+					puts("Packet Too Large while inserting TCP header");
+
+				return(0);
+			}
+
+			tcp = (struct tcp_hdr *) ptr;
+			memset(tcp, 0, sizeof(struct tcp_hdr));
+
+			if(srcport_f)
+				tcp->th_sport= htons(srcport);
+			else
+				tcp->th_sport= htons(1024+ rand() % 64512);
+
+			tcp->th_dport= htons((port_list->port[port_list->cport])->cur);
+
+			if(tcpflags_f)
+				tcp->th_flags= tcpflags;
+			else
+				tcp->th_flags= TH_ACK;
+
+			if(tcpflags & TH_ACK)
+				tcp->th_ack= htonl(rand());
+			else
+				tcp->th_ack= htonl(0);
+
+			tcp->th_win= htons( 4096 * (rand() % 9 + 1));
+
+			/* Current version of tcp6 does not support sending TCP options */
+			tcp->th_off= sizeof(struct tcp_hdr) >> 2;
+			ptr+= tcp->th_off << 2;
+
+			if( (ptr + rhbytes) > v6buffer+idata->max_packet_size){
+				puts("Packet Too Large while inserting TCP segment");
+				exit(EXIT_FAILURE);
+			}
+
+			while(rhbytes>=4){
+				*(uint32_t *)ptr = random();
+				ptr += sizeof(uint32_t);
+				rhbytes -= sizeof(uint32_t);
+			}
+
+			while(rhbytes>0){
+				*(uint8_t *) ptr= (uint8_t) random();
+				ptr++;
+				rhbytes--;
+			}
+
+			ipv6->ip6_plen = htons((ptr - v6buffer) - MIN_IPV6_HLEN);
+			tcp->th_sum = 0;
+			tcp->th_sum = in_chksum(v6buffer, tcp, ptr-((unsigned char *)tcp), IPPROTO_TCP);
+			break;
+
+		case IPPROTO_UDP:
+			*prev_nh = IPPROTO_UDP;
+
+			if( (ptr+sizeof(struct udp_hdr)) > (v6buffer+ idata->max_packet_size)){
+				puts("Packet too large while inserting ICMPv6 header (should be using Frag. option?)");
+				exit(EXIT_FAILURE);
+			}
+
+			udp= (struct udp_hdr *) ptr;
+			memset(udp, 0, sizeof(struct udp_hdr));
+			ptr+= sizeof(struct udp_hdr);
+
+			/*
+			   For UDP, we encode the current probe number and the current Hop Limit as fr TCP.
+			   Namely, we encode the probe number and the current Hop Limit in the TCP Source Port.
+			   The probe number is encoded in the upper eight bits, while the current Hop Limit is
+			   encoded in the lower eight bits. A constant "offset" is employed for encoding the probe
+			   number, such that the resulting Source Port falls into what is typically known as the
+			   dynamic ports range (say, ports larger than 50000).
+			 */
+
+			if(srcport_f)
+				udp->uh_sport= htons(srcport);
+			else
+				udp->uh_sport= htons(1024+ rand() % 64512);
+
+			udp->uh_dport= htons((port_list->port[port_list->cport])->cur);
+
+			/* XXX Send some minimum packet size -- should be changed */
+			rhbytes= 40;
+
+			if(rhbytes){
+				rhleft=rhbytes;
+
+				if( (ptr + rhleft) > (v6buffer+ idata->max_packet_size)){
+					puts("Packet Too Large while inserting TCP segment");
+					exit(EXIT_FAILURE);
+				}
+
+				while(rhleft>=4){
+					*(uint32_t *)ptr = random();
+					ptr += sizeof(uint32_t);
+					rhleft -= sizeof(uint32_t);
+				}
+
+				while(rhleft>0){
+					*(uint8_t *) ptr= (uint8_t) random();
+					ptr++;
+					rhleft--;
+				}
+			}
+
+			ipv6->ip6_plen = htons((ptr - v6buffer) - MIN_IPV6_HLEN);
+			udp->uh_ulen= htons(ptr - (unsigned char *) udp);
+			udp->uh_sum=0;
+			udp->uh_sum = in_chksum(v6buffer, udp, ptr-((unsigned char *)udp), IPPROTO_UDP);
+			break;
+	}
+
+	if((nw=pcap_inject(idata->pfd, buffer, ptr - buffer)) ==  -1){
+		if(idata->verbose_f)
+			printf("pcap_inject(): %s\n", pcap_geterr(idata->pfd));
+
+		return(0);
+	}
+
+	if(nw != (ptr-buffer)){
+		if(idata->verbose_f)
+			printf("pcap_inject(): only wrote %lu bytes (rather than %lu bytes)\n", (LUI) nw, \
+																			(LUI) (ptr-buffer));
+		return(0);
+	}
+
+	return(1);
+}
+
 
 
 
@@ -3233,7 +4536,7 @@ int multi_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *src
 	struct sigaction			new_sig, old_sig;
 	struct ip6_dest				*destopth;
 	struct ip6_option			*opt;
-	u_int32_t					*uint32;
+	uint32_t					*uint32;
 	unsigned char				error_f=FALSE, llocalsrc_f=FALSE;
 	int 						result;
 
@@ -3258,7 +4561,7 @@ int multi_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *src
 	switch(type){
 		case PROBE_ICMP6_ECHO:
 			if(pcap_compile(pfd, &pcap_filter, PCAP_ICMPV6_ERNS_FILTER, PCAP_OPT, PCAP_NETMASK_UNKNOWN) == -1){
-				if(idata->verbose_f>1)
+				if(idata->verbose_f)
 					printf("pcap_compile(): %s", pcap_geterr(pfd));
 
 				return(-1);
@@ -3267,7 +4570,7 @@ int multi_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *src
 
 		case PROBE_UNREC_OPT:
 			if(pcap_compile(pfd, &pcap_filter, PCAP_ICMPV6_ERRORNS_FILTER, PCAP_OPT, PCAP_NETMASK_UNKNOWN) == -1){
-				if(idata->verbose_f>1)
+				if(idata->verbose_f)
 					printf("pcap_compile(): %s", pcap_geterr(pfd));
 
 				return(-1);
@@ -3280,7 +4583,7 @@ int multi_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *src
 	}
 
 	if(pcap_setfilter(pfd, &pcap_filter) == -1){
-		if(idata->verbose_f>1)
+		if(idata->verbose_f)
 			printf("pcap_setfilter(): %s", pcap_geterr(pfd));
 
 		return(-1);
@@ -3324,8 +4627,8 @@ int multi_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *src
 			ptr = ptr+ sizeof(struct icmp6_hdr);
 
 			for(i=0; i<(ICMPV6_ECHO_PAYLOAD_SIZE>>2); i++){
-				*(u_int32_t *)ptr = random();
-				ptr += sizeof(u_int32_t);
+				*(uint32_t *)ptr = random();
+				ptr += sizeof(uint32_t);
 			}
 			break;
 
@@ -3349,7 +4652,7 @@ int multi_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *src
 			opt->ip6o_len= 4;
 
 			ptr= ptr + 2;
-			uint32 = (u_int32_t *) ptr;
+			uint32 = (uint32_t *) ptr;
 			*uint32 = random();
 
 			ptr= ptr +4;
@@ -3363,8 +4666,8 @@ int multi_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *src
 			ptr = ptr+ sizeof(struct icmp6_hdr);
 
 			for(i=0; i<(ICMPV6_ECHO_PAYLOAD_SIZE>>2); i++){
-				*(u_int32_t *)ptr = random();
-				ptr += sizeof(u_int32_t);
+				*(uint32_t *)ptr = random();
+				ptr += sizeof(uint32_t);
 			}
 			break;
 	}
@@ -3375,7 +4678,7 @@ int multi_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *src
 
 	/* We set the signal handler, and the anchor for siglongjump() */
 	canjump=0;
-	bzero(&new_sig, sizeof(struct sigaction));
+	memset(&new_sig, 0, sizeof(struct sigaction));
 	sigemptyset(&new_sig.sa_mask);
 	new_sig.sa_handler= &local_sig_alarm;
 
@@ -3477,7 +4780,7 @@ int multi_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *src
 							break;
 						}
 
-						bzero(hlist->host[hlist->nhosts], sizeof(struct host_entry));
+						memset(hlist->host[hlist->nhosts], 0, sizeof(struct host_entry));
 
 						(hlist->host[hlist->nhosts])->ip6= pkt_ipv6->ip6_src;
 						(hlist->host[hlist->nhosts])->ether= pkt_ether->src;
@@ -3553,7 +4856,7 @@ int host_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *srca
 	struct sigaction		new_sig, old_sig;
 	struct ip6_dest			*destopth;
 	struct ip6_option		*opt;
-	u_int32_t				*uint32;
+	uint32_t				*uint32;
 	unsigned char			foundaddr_f=FALSE, error_f=FALSE;
 	int				result;
 
@@ -3641,8 +4944,8 @@ int host_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *srca
 			ptr = ptr+ sizeof(struct icmp6_hdr);
 
 			for(i=0; i<(ICMPV6_ECHO_PAYLOAD_SIZE>>2); i++){
-				*(u_int32_t *)ptr = random();
-				ptr += sizeof(u_int32_t);
+				*(uint32_t *)ptr = random();
+				ptr += sizeof(uint32_t);
 			}
 			break;
 
@@ -3667,7 +4970,7 @@ int host_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *srca
 			opt->ip6o_len= 4;
 
 			ptr= ptr + 2;
-			uint32 = (u_int32_t *) ptr;
+			uint32 = (uint32_t *) ptr;
 			*uint32 = random();
 
 			ptr= ptr +4;
@@ -3681,8 +4984,8 @@ int host_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *srca
 			ptr = ptr+ sizeof(struct icmp6_hdr);
 
 			for(i=0; i<(ICMPV6_ECHO_PAYLOAD_SIZE>>2); i++){
-				*(u_int32_t *)ptr = random();
-				ptr += sizeof(u_int32_t);
+				*(uint32_t *)ptr = random();
+				ptr += sizeof(uint32_t);
 			}
 			break;
 	}
@@ -3693,7 +4996,7 @@ int host_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *srca
 
 	/* We set the signal handler, and the anchor for siglongjump() */
 	canjump=0;
-	bzero(&new_sig, sizeof(struct sigaction));
+	memset(&new_sig, 0, sizeof(struct sigaction));
 	sigemptyset(&new_sig.sa_mask);
 	new_sig.sa_handler= &local_sig_alarm;
 
@@ -3922,17 +5225,17 @@ int create_candidate_globals(struct iface_data *idata, struct host_list *local, 
 
 	for(i=0; (i < local->nhosts) && (candidate->nhosts < candidate->maxhosts); i++){
 
-		/* Global Address present in "local" list -- shouldn't happen, though */
-		if((local->host[i])->ip6.s6_addr16[0] == htons(0xfe80)){
+		/* Avoid global Address present in "local" list -- shouldn't happen, though */
+		if(IN6_IS_ADDR_LINKLOCAL(&((local->host[i])->ip6)) ){
 			/* We create one candidate address with the Interface-ID of the link-local address,
 			   for each of the autoconf prefixes
 			 */
 			for(j=0; (j < idata->prefix_ac.nprefix) && (candidate->nhosts < candidate->maxhosts); j++){
-				for(k=0; k<4; k++)
-					caddr.s6_addr16[k] = (idata->prefix_ac.prefix[j])->ip6.s6_addr16[k];
+				for(k=0; k<2; k++)
+					caddr.s6_addr32[k] = (idata->prefix_ac.prefix[j])->ip6.s6_addr32[k];
 
-				for(k=4; k<8; k++)
-					caddr.s6_addr16[k] = local->host[i]->ip6.s6_addr16[k];
+				for(k=2; k<4; k++)
+					caddr.s6_addr32[k] = local->host[i]->ip6.s6_addr32[k];
 
 				/* We discard the candidate address if it is already present in the "global" list */
 				if(is_ip6_in_list(&caddr, global))
@@ -3945,7 +5248,7 @@ int create_candidate_globals(struct iface_data *idata, struct host_list *local, 
 					return(-1);
 				}
 
-				bzero(candidate->host[candidate->nhosts], sizeof(struct host_entry));
+				memset(candidate->host[candidate->nhosts], 0, sizeof(struct host_entry));
 
 				(candidate->host[candidate->nhosts])->ip6 = caddr;
 				(candidate->host[candidate->nhosts])->ether = (local->host[i])->ether;
@@ -4241,8 +5544,11 @@ int process_config_file(const char *path){
 				fname[MAX_FILENAME_SIZE-1]=0;
 				fname_f=TRUE;
 			}
-
-
+			else if(strncmp(key, "Ports-Database", MAX_VAR_NAME_LEN) == 0){
+				strncpy(portsfname, value, MAX_FILENAME_SIZE-1);
+				portsfname[MAX_FILENAME_SIZE-1]=0;
+				portsfname_f=TRUE;
+			}
 		}
 		else if(r == -1){
 			if(verbose_f){
@@ -4259,7 +5565,10 @@ int process_config_file(const char *path){
 	fclose(fp);
 
 	if(!fname_f)
-		strncpy(fname, "/usr/share/ipv6toolkit/oui.txt", MAX_FILENAME_SIZE-1);
+		strncpy(fname, "/usr/local/share/ipv6toolkit/oui.txt", MAX_FILENAME_SIZE-1);
+
+	if(!portsfname_f)
+		strncpy(fname, "/usr/local/share/ipv6toolkit/service-names-port-numbers.csv", MAX_FILENAME_SIZE-1);
 
 	return(1);
 }
@@ -4272,12 +5581,15 @@ int process_config_file(const char *path){
  * Check whether an IPv6 address belongs to one of our scan ranges
  */
 int	is_ip6_in_scan_list(struct scan_list *scan, struct in6_addr *ip6){
-	unsigned int i, j;
+	unsigned int	i, j;
+	union my6_addr	myip6;
+
+	myip6.in6_addr= *ip6;
 
 	for(i=0; i< scan->ntarget; i++){
 		for(j=0; j<8; j++){
-			if( (ntohs(ip6->s6_addr16[j]) < ntohs((scan->target[i])->start.s6_addr16[j])) || \
-					(ntohs(ip6->s6_addr16[j]) > ntohs((scan->target[i])->end.s6_addr16[j]))){
+			if( (ntohs(myip6.s6addr16[j]) < ntohs((scan->target[i])->start.s6addr16[j])) || \
+					(ntohs(myip6.s6addr16[j]) > ntohs((scan->target[i])->end.s6addr16[j]))){
 				break;
 			}
 		}
@@ -4303,4 +5615,233 @@ void local_sig_alarm(int num){
 
 	siglongjmp(env, 1);
 }
+
+
+
+/*
+ * Function: load_port_table()
+ *
+ * Create table with mappings of port number -> service name
+ */
+
+int load_port_table(struct port_table_entry *pentry, char *prot, unsigned int maxport){
+	FILE 				*fp;
+	char				line[MAX_PORTS_LINE_SIZE], proto[MAX_PORTS_LINE_SIZE], name[MAX_PORTS_LINE_SIZE];
+	char				*charptr, *lasts;
+	unsigned int		lines=0, ports=0;
+	unsigned int 		port;
+	char unassigned[]="Unassigned";
+
+	/* We initialize all entries to "Unassigned" */
+	for(i=0; i<maxport; i++){
+		strncpy(pentry[i].name, unassigned, sizeof(pentry[i].name));
+		pentry[i].name[sizeof(pentry[i].name)-1]=0;
+	}
+
+	if( (fp=fopen(portsfname, "r")) == NULL){
+		perror("scan6:");
+		return(0);
+	}
+
+	while( ports < maxport && fgets(line, MAX_PORTS_LINE_SIZE, fp) != NULL){
+		lines=Strnlen(line, MAX_PORTS_LINE_SIZE);
+		charptr= (char *)line;
+
+		/* Skip any whitespaces */
+		while(charptr < ( (char *)line + lines) && *charptr == ' ')
+			charptr++;
+
+		if((charptr = strtok_r(charptr, ",", &lasts)) == NULL){
+			continue;
+		}
+
+		strncpy(name, charptr, sizeof(name));
+		name[sizeof(name)-1]=0;
+
+		if((charptr = strtok_r(NULL, ",", &lasts)) == NULL){
+			continue;
+		}
+
+		port= atoi(charptr);
+
+		if(port >= maxport)
+			continue;
+
+		if((charptr = strtok_r(NULL, ",", &lasts)) == NULL){
+			continue;
+		}
+
+		strncpy(proto, charptr, sizeof(proto));
+		proto[sizeof(proto)-1]=0;
+
+		if(strncmp(prot, proto, sizeof(proto)) == 0){
+			strncpy(pentry[port].name, name, sizeof(pentry[port].name));
+			pentry[port].name[sizeof(pentry[port].name)-1]=0;
+		}
+	}
+
+
+	if(ferror(fp)){
+		perror("scan6:");
+
+		return(0);
+	}
+
+	fclose(fp);
+	return(1);
+}
+
+
+/*
+ * Function: print_port_table()
+ *
+ * Print the port table (for debugging puroses)
+ */
+
+void print_port_table(struct port_table_entry *pentry, unsigned int maxport){
+	unsigned int i;
+
+	for(i=0; i < maxport; i++){
+		printf("%5d (%s)\n", i, pentry[i].name);
+	}
+}
+
+/*
+ * Function: init_packet_data()
+ *
+ * Initialize the contents of the attack packet (Ethernet header, IPv6 Header, and ICMPv6 header)
+ * that are expected to remain constant for the specified attack.
+ */
+void init_packet_data(struct iface_data *idata){
+	struct dlt_null *dlt_null;
+	ethernet= (struct ether_header *) buffer;
+	dlt_null= (struct dlt_null *) buffer;
+	v6buffer = buffer + idata->linkhsize;
+	ipv6 = (struct ip6_hdr *) v6buffer;
+
+	if(idata->type == DLT_EN10MB){
+		ethernet->ether_type = htons(ETHERTYPE_IPV6);
+
+		if(!(idata->flags & IFACE_LOOPBACK)){
+			ethernet->src = idata->hsrcaddr;
+			ethernet->dst = idata->hdstaddr;
+		}
+	}
+	else if(idata->type == DLT_NULL){
+		dlt_null->family= PF_INET6;
+	}
+#if defined (__OpenBSD__)
+	else if(idata->type == DLT_LOOP){
+		dlt_null->family= htonl(PF_INET6);
+	}
+#endif
+
+	ipv6->ip6_flow=0;
+	ipv6->ip6_vfc= 0x60;
+	ipv6->ip6_hlim= hoplimit;
+	ipv6->ip6_src= idata->srcaddr;
+	ipv6->ip6_dst= idata->dstaddr;
+
+	prev_nh = (unsigned char *) &(ipv6->ip6_nxt);
+
+	ptr = (unsigned char *) v6buffer + MIN_IPV6_HLEN;
+    
+	if(hbhopthdr_f){
+		hbhopthdrs=0;
+	
+		while(hbhopthdrs < nhbhopthdr){
+			if((ptr+ hbhopthdrlen[hbhopthdrs]) > (v6buffer+ idata->mtu)){
+				puts("Packet too large while processing HBH Opt. Header");
+				exit(EXIT_FAILURE);
+			}
+	    
+			*prev_nh = IPPROTO_HOPOPTS;
+			prev_nh = ptr;
+			memcpy(ptr, hbhopthdr[hbhopthdrs], hbhopthdrlen[hbhopthdrs]);
+			ptr = ptr + hbhopthdrlen[hbhopthdrs];
+			hbhopthdrs++;
+		}
+	}
+
+	if(dstoptuhdr_f){
+		dstoptuhdrs=0;
+	
+		while(dstoptuhdrs < ndstoptuhdr){
+			if((ptr+ dstoptuhdrlen[dstoptuhdrs]) > (v6buffer+ idata->mtu)){
+				puts("Packet too large while processing Dest. Opt. Header (Unfrag. Part)");
+				exit(EXIT_FAILURE);
+			}
+
+			*prev_nh = IPPROTO_DSTOPTS;
+			prev_nh = ptr;
+			memcpy(ptr, dstoptuhdr[dstoptuhdrs], dstoptuhdrlen[dstoptuhdrs]);
+			ptr = ptr + dstoptuhdrlen[dstoptuhdrs];
+			dstoptuhdrs++;
+		}
+	}
+
+	/* Everything that follows is the Fragmentable Part of the packet */
+	fragpart = ptr;
+
+	if(idata->fragh_f){
+		/* Check that we are able to send the Unfragmentable Part, together with a 
+		   Fragment Header and a chunk data over our link layer
+		 */
+		if( (fragpart+sizeof(fraghdr)+nfrags) > (v6buffer+idata->mtu)){
+			puts("Unfragmentable part too large for current MTU");
+			exit(EXIT_FAILURE);
+		}
+
+		/* We prepare a separete Fragment Header, but we do not include it in the packet to be sent.
+		   This Fragment Header will be used (an assembled with the rest of the packet by the 
+		   send_packet() function.
+		*/
+		memset(&fraghdr, 0, FRAG_HDR_SIZE);
+		*prev_nh = IPPROTO_FRAGMENT;
+		prev_nh = (unsigned char *) &fraghdr;
+	}
+
+	if(dstopthdr_f){
+		dstopthdrs=0;
+	
+		while(dstopthdrs < ndstopthdr){
+			if((ptr+ dstopthdrlen[dstopthdrs]) > (v6buffer+ idata->max_packet_size)){
+			puts("Packet too large while processing Dest. Opt. Header (should be using the Frag. option?)");
+			exit(EXIT_FAILURE);
+			}
+    
+			*prev_nh = IPPROTO_DSTOPTS;
+			prev_nh = ptr;
+			memcpy(ptr, dstopthdr[dstopthdrs], dstopthdrlen[dstopthdrs]);
+			ptr = ptr + dstopthdrlen[dstopthdrs];
+			dstopthdrs++;
+		}
+	}
+
+
+	*prev_nh = IPPROTO_TCP;
+
+	startofprefixes=ptr;
+}
+
+
+/*
+ * Function: print_port_entries()
+ *
+ * Print port entries
+ */
+
+void print_port_entries(struct port_list *port_list){
+	int i;
+
+	for(i=0; i< port_list->nport; i++){
+		if((port_list->port[i])->start == (port_list->port[i])->end){
+			printf("%u;", (port_list->port[i])->start);
+		}
+		else{
+			printf("%u-%u;", (port_list->port[i])->start, (port_list->port[i])->end);
+		}
+	}
+}
+
 

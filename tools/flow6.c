@@ -2,7 +2,7 @@
  * flow6: A security assessment tool that determines the Flow Label
  *        generation policy of a target node
  *
- * Copyright (C) 2011-2013 Fernando Gont <fgont@si6networks.com>
+ * Copyright (C) 2011-2014 Fernando Gont <fgont@si6networks.com>
  *
  * Programmed by Fernando Gont for SI6 Networks (www.si6networks.com)
  *
@@ -22,9 +22,6 @@
  * 
  * Build with: make flow6
  * 
- * This program has been tested to compile and run on: Debian GNU/Linux 6.0,
- * FreeBSD 9.0, NetBSD 5.1, OpenBSD 5.0, Ubuntu 11.10, and Mac OS X.
- *
  * It requires that the libpcap library be installed on your system.
  *
  * Please send any bug reports to Fernando Gont <fgont@si6networks.com>
@@ -42,12 +39,7 @@
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
 #include <net/if.h>
-#include <ifaddrs.h>
-#ifdef __linux__
-	#include <netpacket/packet.h>
-#elif defined (__FreeBSD__) || defined(__NetBSD__) || defined (__OpenBSD__) || defined(__APPLE__) || ( !defined(__FreeBSD__) && defined(__FreeBSD_kernel__))
-	#include <net/if_dl.h>
-#endif
+#include <netdb.h>
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -69,7 +61,7 @@ void				print_attack_info(void);
 void				usage(void);
 void				print_help(void);
 int					send_fid_probe(void);
-int					predict_flow_id(u_int32_t *, unsigned int, u_int32_t *, unsigned int);
+int					predict_flow_id(uint32_t *, unsigned int, uint32_t *, unsigned int);
 
 
 /* Used for router discovery */
@@ -118,8 +110,8 @@ unsigned int		skip;
 unsigned int		frags, nfrags, nsleep;
 unsigned char		srcpreflen;
 
-u_int16_t			mask, ip6length;
-u_int8_t			hoplimit;
+uint16_t			mask, ip6length;
+uint8_t			hoplimit;
 
 char 				plinkaddr[ETHER_ADDR_PLEN];
 char 				psrcaddr[INET6_ADDRSTRLEN], pdstaddr[INET6_ADDRSTRLEN], pv6addr[INET6_ADDRSTRLEN];
@@ -145,9 +137,9 @@ unsigned char		*prev_nh, *startoffragment;
 
 
 /* For the sampling of Flow Label values */
-u_int16_t			baseport, lastport, dstport, tcpwin, addr_sig, addr_key;
-u_int32_t			tcpseq;
-u_int8_t			protocol;
+uint16_t			baseport, lastport, dstport, tcpwin, addr_sig, addr_key;
+uint32_t			tcpseq;
+uint8_t			protocol;
 
 
 int main(int argc, char **argv){
@@ -156,11 +148,12 @@ int main(int argc, char **argv){
 	struct timeval		timeout;
 	int					r, sel;
 	time_t				curtime, start, lastfrag1=0;
+	struct target_ipv6	targetipv6;
 
 	/* Arrays for storing the Flow ID samples */
-	u_int32_t		test1[NSAMPLES], test2[NSAMPLES];
-	unsigned int	ntest1=0, ntest2=0;
-	unsigned char	testtype;
+	uint32_t			test1[NSAMPLES], test2[NSAMPLES];
+	unsigned int		ntest1=0, ntest2=0;
+	unsigned char		testtype;
 
 	static struct option longopts[] = {
 		{"interface", required_argument, 0, 'i'},
@@ -173,7 +166,8 @@ int main(int argc, char **argv){
 		{"dst-port", no_argument, 0, 'p'},
 		{"flow-label-policy", no_argument, 0, 'W'},
 		{"verbose", no_argument, 0, 'v'},
-		{"help", no_argument, 0, 'h'}
+		{"help", no_argument, 0, 'h'},
+		{0, 0, 0,  0 }
 	};
 
 	char shortopts[]= "i:s:d:A:S:D:P:p:Wvh";
@@ -234,11 +228,23 @@ int main(int argc, char **argv){
 				break;
 	    
 			case 'd':	/* IPv6 Destination Address */
-				if( inet_pton(AF_INET6, optarg, &(idata.dstaddr)) <= 0){
-					puts("inet_pton(): address not valid");
-					exit(EXIT_FAILURE);
+				strncpy( targetipv6.name, optarg, NI_MAXHOST);
+				targetipv6.name[NI_MAXHOST-1]= 0;
+				targetipv6.flags= AI_CANONNAME;
+
+				if( (r=get_ipv6_target(&targetipv6)) != 0){
+
+					if(r < 0){
+						printf("Unknown Destination: %s\n", gai_strerror(targetipv6.res));
+					}
+					else{
+						puts("Unknown Destination: No IPv6 address found for specified destination");
+					}
+
+					exit(1);
 				}
-		
+
+				idata.dstaddr= targetipv6.ip6;
 				idata.dstaddr_f = 1;
 				break;
 
@@ -333,11 +339,6 @@ int main(int argc, char **argv){
 		exit(EXIT_FAILURE);
 	}
     
-	if(fragh_f)
-		idata.max_packet_size = MAX_IPV6_PAYLOAD + MIN_IPV6_HLEN;
-	else
-		idata.max_packet_size = ETH_DATA_LEN;
-
 	if(idata.verbose_f){
 		print_attack_info();
 	}
@@ -368,7 +369,7 @@ int main(int argc, char **argv){
 		puts("Identifying the 'Flow ID' generation policy of the target node....");
 
 		if(protocol == IPPROTO_TCP){
-			tcpwin= ((u_int16_t) random() + 1500) & (u_int16_t)0x7f00;
+			tcpwin= ((uint16_t) random() + 1500) & (uint16_t)0x7f00;
 			tcpseq= random();
 			baseport= 50000+ random()%10000;
 			lastport= baseport;
@@ -388,11 +389,6 @@ int main(int argc, char **argv){
 		}
 
 		pcap_freecode(&pcap_filter);
-
-		if( (idata.fd= pcap_fileno(idata.pfd)) == -1){
-			puts("Error obtaining descriptor number for pcap_t");
-			exit(EXIT_FAILURE);
-		}
 
 		FD_ZERO(&sset);
 		FD_SET(idata.fd, &sset);
@@ -446,8 +442,9 @@ int main(int argc, char **argv){
 						 * to Neighbor Solicitations that target those addresses, and accept ICMPv6 Echo Replies
 						 * only if they are destined to those addresses
 						 */
-						idata.srcaddr.s6_addr16[5]= addr_sig;
-						idata.srcaddr.s6_addr16[7] =  idata.srcaddr.s6_addr16[6] ^ addr_key;
+						idata.srcaddr.s6_addr32[2]= htonl((ntohl(idata.srcaddr.s6_addr32[2]) & 0xffff0000) | addr_sig);
+						idata.srcaddr.s6_addr32[3]= htonl((ntohl(idata.srcaddr.s6_addr32[3]) & 0xffff0000) | \
+						                            ((uint16_t)(ntohl(idata.srcaddr.s6_addr32[3])>>16) ^ addr_key));
 
 						if(send_neighbor_solicit(&idata, &(idata.dstaddr)) == -1){
 							puts("Error while sending Neighbor Solicitation");
@@ -468,8 +465,14 @@ int main(int argc, char **argv){
 			}
 
 			rset= sset;
+
+#if !defined(sun) && !defined(__sun)
 			timeout.tv_usec=0;
 			timeout.tv_sec= 1;
+#else
+			timeout.tv_usec=10000;
+			timeout.tv_sec= 0;
+#endif
 
 			if((sel=select(idata.fd+1, &rset, NULL, NULL, &timeout)) == -1){
 				if(errno == EINTR){
@@ -481,135 +484,137 @@ int main(int argc, char **argv){
 				}
 			}
 
-			if(sel == 0)
-				continue;
+#if defined(sun) || defined(__sun)
+			if(TRUE){
+#else
+			if(sel && FD_ISSET(idata.fd, &rset)){
+#endif
+				/* Read a packet (Echo Reply, or Neighbor Solicitation) */
+				if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
+					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
+					exit(EXIT_FAILURE);
+				}
+				else if(r == 1){
+					pkt_ether = (struct ether_header *) pktdata;
+					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
+					pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
+					pkt_end = (unsigned char *) pktdata + pkthdr->caplen;
 
-			/* Read a packet (Echo Reply, or Neighbor Solicitation) */
-			if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
-				printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
-				exit(EXIT_FAILURE);
-			}
-			else if(r == 0){
-				continue; /* Should never happen */
-			}
+					if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN))
+						continue;
 
-			pkt_ether = (struct ether_header *) pktdata;
-			pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
-			pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
-			pkt_end = (unsigned char *) pktdata + pkthdr->caplen;
+					if(pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6 && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
+						pkt_ns= (struct nd_neighbor_solicit *) pkt_icmp6;
 
-			if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN))
-				continue;
+						if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
+							continue;
+						/* 
+							If the addresses that we're using are not actually configured on the local system
+							(i.e., they are "spoofed", we must check whether it is a Neighbor Solicitation for 
+							one of our addresses, and respond with a Neighbor Advertisement. Otherwise, the kernel
+							will take care of that.
+						 */
+						if(testtype==FIXED_ORIGIN){
+							if(!localaddr_f && is_eq_in6_addr(&(pkt_ns->nd_ns_target), &(idata.srcaddr))){
+								if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
+									puts("Error sending Neighbor Advertisement");
+									exit(EXIT_FAILURE);
+								}
+							}
+						}
+						else if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK)){
+							if( (ntohl(pkt_ns->nd_ns_target.s6_addr32[2]) & 0x0000ffff) != addr_sig || \
+								(ntohl(pkt_ns->nd_ns_target.s6_addr32[3]) & 0x0000ffff) != ( (ntohl(pkt_ns->nd_ns_target.s6_addr32[3])>>16) ^ addr_key)){
+								continue;
+							}
 
-			if(pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6 && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
-				pkt_ns= (struct nd_neighbor_solicit *) pkt_icmp6;
+							if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
+								puts("Error sending Neighbor Advertisement");
+								exit(EXIT_FAILURE);
+							}
+						}				
+					}
+					else if(pkt_ipv6->ip6_nxt == protocol){
 
-				if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
-					continue;
-				/* 
-				    If the addresses that we're using are not actually configured on the local system
-				    (i.e., they are "spoofed", we must check whether it is a Neighbor Solicitation for 
-				    one of our addresses, and respond with a Neighbor Advertisement. Otherwise, the kernel
-				    will take care of that.
-				 */
-				if(testtype==FIXED_ORIGIN){
-					if(!localaddr_f && is_eq_in6_addr(&(pkt_ns->nd_ns_target), &(idata.srcaddr))){
-						if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
-							puts("Error sending Neighbor Advertisement");
-							exit(EXIT_FAILURE);
+						/* Perform TCP-specific validation checks */
+						if(protocol == IPPROTO_TCP){
+							if( (pkt_end - (unsigned char *) pkt_ipv6) < \
+									(sizeof(struct ip6_hdr) + sizeof(struct tcp_hdr)))
+								continue;
+
+							pkt_tcp= (struct tcp_hdr *) ((unsigned char *)pkt_ipv6 + sizeof(struct ip6_hdr));
+
+							/*
+							 * The TCP Destination Port must correspond to one of the ports that we have used as
+							 * TCP Source Port
+							 */
+							if(ntohs(pkt_tcp->th_dport) < baseport || ntohs(pkt_tcp->th_dport) > lastport)
+								continue;
+
+							/* The Source Port must be that to which we're sending our TCP segments */
+							if(ntohs(pkt_tcp->th_sport) != dstport)
+								continue;
+
+							/* The TCP Acknowledgement Number must ack our SYN */
+							if(ntohl(pkt_tcp->th_ack) != tcpseq+1)
+								continue;
+
+							/* We sample Flow ID's only on SYN/ACKs */
+							if( (pkt_tcp->th_flags & ~TH_SYN) == 0 || (pkt_tcp->th_flags & TH_ACK) == 0)
+								continue;
+
+							/* The TCP checksum must be valid */
+							if(in_chksum(pkt_ipv6, pkt_tcp, pkt_end-((unsigned char *)pkt_tcp), IPPROTO_TCP) != 0)
+								continue;
+						}
+						/* Perform UDP-specific validation checks */
+						else if(protocol == IPPROTO_UDP){
+							if( (pkt_end - (unsigned char *) pkt_ipv6) < \
+									(sizeof(struct ip6_hdr) + sizeof(struct udp_hdr)))
+								continue;
+
+							pkt_udp= (struct udp_hdr *) ((unsigned char *)pkt_ipv6 + sizeof(struct ip6_hdr));
+
+							/*
+							 * The UDP Destination Port must correspond to one of the ports that we have used as
+							 * the UDP Source Port
+							 */
+							if(ntohs(pkt_udp->uh_dport) < baseport || ntohs(pkt_udp->uh_dport) > lastport)
+								continue;
+
+							/* The Source Port must be that to which we're sending our UDP datagrams */
+							if(ntohs(pkt_udp->uh_sport) != dstport)
+								continue;
+
+							/* The UDP checksum must be valid */
+							if(in_chksum(pkt_ipv6, pkt_udp, pkt_end-((unsigned char *)pkt_udp), IPPROTO_UDP) != 0)
+								continue;
+						}
+
+						if(testtype==FIXED_ORIGIN){
+							if(!is_eq_in6_addr(&(pkt_ipv6->ip6_dst), &(idata.srcaddr))){
+								continue;
+							}
+
+							if(ntest1 >= NSAMPLES)
+								continue;
+
+							test1[ntest1]= ntohl(pkt_ipv6->ip6_flow) & 0x000fffff;
+							ntest1++;
+						}
+						else{
+							if( (ntohl(pkt_ipv6->ip6_dst.s6_addr32[2]) & 0x0000ffff) != addr_sig || \
+								(ntohl(pkt_ipv6->ip6_dst.s6_addr32[3]) & 0x0000ffff) !=  ( (ntohl(pkt_ipv6->ip6_dst.s6_addr32[3])>>16) ^ addr_key)){
+								continue;
+							}
+
+							if(ntest2 >= NSAMPLES)
+								continue;
+
+							test2[ntest2]= ntohl(pkt_ipv6->ip6_flow) & 0x000fffff;
+							ntest2++;
 						}
 					}
-				}
-				else{
-					if(pkt_ns->nd_ns_target.s6_addr16[5] != addr_sig || \
-						pkt_ns->nd_ns_target.s6_addr16[7] !=  (pkt_ns->nd_ns_target.s6_addr16[6] ^ addr_key))
-						continue;
-
-					if(send_neighbor_advert(&idata, idata.pfd, pktdata) == -1){
-						puts("Error sending Neighbor Advertisement");
-						exit(EXIT_FAILURE);
-					}
-				}				
-			}
-			else if(pkt_ipv6->ip6_nxt == protocol){
-
-				/* Perform TCP-specific validation checks */
-				if(protocol == IPPROTO_TCP){
-					if( (pkt_end - (unsigned char *) pkt_ipv6) < \
-							(sizeof(struct ip6_hdr) + sizeof(struct tcp_hdr)))
-						continue;
-
-					pkt_tcp= (struct tcp_hdr *) ((unsigned char *)pkt_ipv6 + sizeof(struct ip6_hdr));
-
-					/*
-					 * The TCP Destination Port must correspond to one of the ports that we have used as
-					 * TCP Source Port
-					 */
-					if(ntohs(pkt_tcp->th_dport) < baseport || ntohs(pkt_tcp->th_dport) > lastport)
-						continue;
-
-					/* The Source Port must be that to which we're sending our TCP segments */
-					if(ntohs(pkt_tcp->th_sport) != dstport)
-						continue;
-
-					/* The TCP Acknowledgement Number must ack our SYN */
-					if(ntohl(pkt_tcp->th_ack) != tcpseq+1)
-						continue;
-
-					/* We sample Flow ID's only on SYN/ACKs */
-					if( (pkt_tcp->th_flags & ~TH_SYN) == 0 || (pkt_tcp->th_flags & TH_ACK) == 0)
-						continue;
-
-					/* The TCP checksum must be valid */
-					if(in_chksum(pkt_ipv6, pkt_tcp, pkt_end-((unsigned char *)pkt_tcp), IPPROTO_TCP) != 0)
-						continue;
-				}
-				/* Perform UDP-specific validation checks */
-				else if(protocol == IPPROTO_UDP){
-					if( (pkt_end - (unsigned char *) pkt_ipv6) < \
-							(sizeof(struct ip6_hdr) + sizeof(struct udp_hdr)))
-						continue;
-
-					pkt_udp= (struct udp_hdr *) ((unsigned char *)pkt_ipv6 + sizeof(struct ip6_hdr));
-
-					/*
-					 * The UDP Destination Port must correspond to one of the ports that we have used as
-					 * the UDP Source Port
-					 */
-					if(ntohs(pkt_udp->uh_dport) < baseport || ntohs(pkt_udp->uh_dport) > lastport)
-						continue;
-
-					/* The Source Port must be that to which we're sending our UDP datagrams */
-					if(ntohs(pkt_udp->uh_sport) != dstport)
-						continue;
-
-					/* The UDP checksum must be valid */
-					if(in_chksum(pkt_ipv6, pkt_udp, pkt_end-((unsigned char *)pkt_udp), IPPROTO_UDP) != 0)
-						continue;
-				}
-
-				if(testtype==FIXED_ORIGIN){
-					if(!is_eq_in6_addr(&(pkt_ipv6->ip6_dst), &(idata.srcaddr))){
-						continue;
-					}
-
-					if(ntest1 >= NSAMPLES)
-						continue;
-
-					test1[ntest1]= ntohl(pkt_ipv6->ip6_flow) & 0x000fffff;
-					ntest1++;
-				}
-				else{
-					if(pkt_ipv6->ip6_dst.s6_addr16[5] != addr_sig || \
-						pkt_ipv6->ip6_dst.s6_addr16[7] !=  (pkt_ipv6->ip6_dst.s6_addr16[6] ^ addr_key)){
-						continue;
-					}
-
-					if(ntest2 >= NSAMPLES)
-						continue;
-
-					test2[ntest2]= ntohl(pkt_ipv6->ip6_flow) & 0x000fffff;
-					ntest2++;
 				}
 			}
 		}
@@ -664,14 +669,22 @@ int send_fid_probe(void){
 	v6buffer = buffer + idata.linkhsize;
 	ipv6 = (struct ip6_hdr *) v6buffer;
 
-	if(idata.type == DLT_EN10MB && idata.flags != IFACE_LOOPBACK){
-		ethernet->src = idata.hsrcaddr;
-		ethernet->dst = idata.hdstaddr;
+	if(idata.type == DLT_EN10MB){
 		ethernet->ether_type = htons(ETHERTYPE_IPV6);
+
+		if( !(idata.flags & IFACE_LOOPBACK)){
+			ethernet->src = idata.hsrcaddr;
+			ethernet->dst = idata.hdstaddr;
+		}
 	}
 	else if(idata.type == DLT_NULL){
 		dlt_null->family= PF_INET6;
 	}
+#if defined (__OpenBSD__)
+	else if(idata->type == DLT_LOOP){
+		dlt_null->family= htonl(PF_INET6);
+	}
+#endif
 
 	ipv6->ip6_flow=0;
 	ipv6->ip6_vfc= 0x60;
@@ -683,7 +696,7 @@ int send_fid_probe(void){
 	if(protocol == IPPROTO_TCP){
 		tcp= (struct tcp_hdr *) ( (unsigned char *) ipv6 + sizeof(struct ip6_hdr));
 		ptr= (unsigned char *) tcp + sizeof(struct tcp_hdr);
-		bzero(tcp, sizeof(struct tcp_hdr));
+		memset(tcp, 0, sizeof(struct tcp_hdr));
 		tcp->th_sport= htons(lastport);
 		tcp->th_dport= htons(dstport);
 		tcp->th_seq = htonl(tcpseq);
@@ -698,7 +711,7 @@ int send_fid_probe(void){
 	else{
 		udp= (struct udp_hdr *) ( (unsigned char *) ipv6 + sizeof(struct ip6_hdr));
 		ptr= (unsigned char *) udp + sizeof(struct udp_hdr);
-		bzero(udp, sizeof(struct udp_hdr));
+		memset(udp, 0, sizeof(struct udp_hdr));
 		udp->uh_sport= htons(lastport);
 		udp->uh_dport= htons(dstport);
 		ipv6->ip6_plen= htons(ptr - (unsigned char *) udp);
@@ -729,7 +742,7 @@ int send_fid_probe(void){
  * Prints the syntax of the flow6 tool
  */
 void usage(void){
-	puts("usage: flow6 -i INTERFACE -d DST_ADDR [-S LINK_SRC_ADDR] [-D LINK-DST-ADDR]\n"
+	puts("usage: flow6 -d DST_ADDR [-i INTERFACE] [-S LINK_SRC_ADDR] [-D LINK-DST-ADDR]\n"
 	     "       [-s SRC_ADDR[/LEN]] [-A HOP_LIMIT] [-P PROTOCOL] [-p PORT]\n"
 	     "       [-W] [-v] [-h]");
 }
@@ -819,8 +832,8 @@ void print_attack_info(void){
  *
  * Identifies and prints the Flow Label generation policy
 */
-int predict_flow_id(u_int32_t *s1, unsigned int n1, u_int32_t *s2, unsigned int n2){
-	u_int32_t		diff1_avg, diff2_avg;
+int predict_flow_id(uint32_t *s1, unsigned int n1, uint32_t *s2, unsigned int n2){
+	uint32_t		diff1_avg, diff2_avg;
 	double			diff1_sdev, diff2_sdev;
 
 	if(inc_sdev(s1, n1, &diff1_avg, &diff1_sdev) == -1){

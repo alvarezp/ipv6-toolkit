@@ -45,15 +45,16 @@
 
 
 /* Constants for debug mode */
-#define DEBUG_DUMP			1
-#define DEBUG_SCRIPT		2
+#define PROBE_DUMP			1
+#define PROBE_SCRIPT		2
 
 /* Constants for TCP buffers */
 #define TCP_BUFFER_SIZE			65535
 #define TCP_INPUT_BUFFER_SIZE	TCP_BUFFER_SIZE
 #define TCP_OUTPUT_BUFFER_SIZE	TCP_BUFFER_SIZE
 
-struct queue{
+
+struct tcp_queue{
 	unsigned char	data[TCP_BUFFER_SIZE];
 	unsigned char	*in;
 	unsigned char	*out;
@@ -62,36 +63,37 @@ struct queue{
 	unsigned int	free;
 };
 
+
 struct tcp{
 	struct in6_addr	srcaddr;
 	struct in6_addr dstaddr;
-	u_int16_t		srcport;
-	u_int16_t		dstport;
+	uint16_t		srcport;
+	uint16_t		dstport;
 
-	struct queue	in;
-	u_int32_t		rcv_nxt;
-	u_int32_t		rcv_nxtwnd;	
+	struct tcp_queue	in;
+	uint32_t		rcv_nxt;
+	uint32_t		rcv_nxtwnd;	
 
-	struct queue	out;
+	struct tcp_queue	out;
 	unsigned char	*out_una;
 	unsigned char	*out_nxt;    /*  una         nxt  */
-	u_int32_t		snd_una;
-	u_int32_t		snd_nxt;
-	u_int32_t		snd_nxtwnd;
-	u_int32_t		snd_seq; /* TCP seq to use for outgoing segments (for RSTs) */
-	u_int32_t		snd_wl1;
-	u_int32_t		snd_wl2;
+	uint32_t		snd_una;
+	uint32_t		snd_nxt;
+	uint32_t		snd_nxtwnd;
+	uint32_t		snd_seq; /* TCP seq to use for outgoing segments (for RSTs) */
+	uint32_t		snd_wl1;
+	uint32_t		snd_wl2;
 
 	unsigned char	fin_flag;
-	u_int32_t	fin_seq;
+	uint32_t	fin_seq;
 		
 	struct timeval	time;
 	unsigned int	state;
 	unsigned int	open;
 	unsigned int	close;
-	u_int8_t		flags;
-	u_int32_t		ack;
-	u_int32_t		win;	
+	uint8_t		flags;
+	uint32_t		ack;
+	uint32_t		win;	
 
 	unsigned int		fbytes;
 	

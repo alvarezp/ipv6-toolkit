@@ -2,7 +2,7 @@
  * ni6: A security assessment tool that exploits potential flaws
  *      in the processing of ICMPv6 Node Information messages
  *
- * Copyright (C) 2011-2013 Fernando Gont <fgont@si6networks.com>
+ * Copyright (C) 2011-2014 Fernando Gont <fgont@si6networks.com>
  *
  * Programmed by Fernando Gont for SI6 Networks <http://www.si6networks.com>
  *
@@ -18,7 +18,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- *
  * 
  * Build with: make ni6
  * 
@@ -27,6 +26,22 @@
  * Please send any bug reports to Fernando Gont <fgont@si6networks.com>
  */
 
+#include <sys/types.h>
+#include <sys/param.h>
+#include <sys/socket.h>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <netinet/udp.h>
+#include <netinet/ip6.h>
+#include <netinet/icmp6.h>
+#include <net/if.h>
+
+#include <netdb.h>
+#include <pcap.h>
+#include <setjmp.h>
+#include <pwd.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -35,29 +50,10 @@
 #include <unistd.h>
 #include <signal.h>
 #include <string.h>
-#include <strings.h>
-#include <pcap.h>
-#include <sys/types.h>
-#include <sys/param.h>
-#include <setjmp.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netinet/ip6.h>
-#include <netinet/icmp6.h>
-#include <pwd.h>
-#include <sys/socket.h>
-#include <net/if.h>
-#include <ifaddrs.h>
-#ifdef __linux__
-	#include <netpacket/packet.h>
-#elif defined (__FreeBSD__) || defined(__NetBSD__) || defined (__OpenBSD__) || defined(__APPLE__) || ( !defined(__FreeBSD__) && defined(__FreeBSD_kernel__))
-	#include <net/if_dl.h>
-#endif
+
 #include "ni6.h"
 #include "ipv6toolkit.h"
 #include "libipv6.h"
-#include <netinet/tcp.h>
-#include <netinet/udp.h>
 
 
 /* Function prototypes */
@@ -117,8 +113,8 @@ unsigned int		skip;
 unsigned int		nsleep;
 unsigned char		srcpreflen;
 
-u_int16_t			mask;
-u_int8_t			hoplimit;
+uint16_t			mask;
+uint8_t			hoplimit;
 
 char 				plinkaddr[ETHER_ADDR_PLEN];
 char 				psrcaddr[INET6_ADDRSTRLEN], pdstaddr[INET6_ADDRSTRLEN], pv6addr[INET6_ADDRSTRLEN];
@@ -141,7 +137,6 @@ unsigned int		hbhopthdrlen[MAX_HBH_OPT_HDR], m, pad;
 
 struct ip6_frag		fraghdr, *fh;
 struct ip6_hdr		*fipv6;
-unsigned char		fragh_f=0;
 unsigned char		fragbuffer[ETHER_HDR_LEN+MIN_IPV6_HLEN+MAX_IPV6_PAYLOAD];
 unsigned char		*fragpart, *fptr, *fptrend, *ptrend, *ptrhdr, *ptrhdrend;
 unsigned int		hdrlen, ndstopthdr=0, nhbhopthdr=0, ndstoptuhdr=0;
@@ -155,20 +150,21 @@ unsigned int		maxlabel, slvariant, slsize, dlvariant, dlsize;
 char				*name, *named;
 unsigned int		fnamelen, exceedp, fnamedlen, exceedpd, payloadsize;
 int					namelen, namedlen;
-u_int8_t			qtype, type;
-u_int8_t			code=0;
-u_int16_t			flags=0;
+uint8_t			qtype, type;
+uint8_t			code=0;
+uint16_t			flags=0;
 unsigned char		*slpointer, *dlpointer;
 
 struct filters		filters;
 
 
 int main(int argc, char **argv){
-	extern char		*optarg;
-	int				r, sel;
-	fd_set			sset, rset;
-	time_t			curtime, lastni=0, start=0;
-	struct timeval	timeout;
+	extern char			*optarg;
+	int					r, sel;
+	fd_set				sset, rset;
+	time_t				curtime, lastni=0, start=0;
+	struct timeval		timeout;
+	struct target_ipv6	targetipv6;
 
 	/* For queries only: loops to the beginning of the same label (shouldn't work) */
 	unsigned char	dnsloopq0[]={0x04, 0x61, 0x61, 0x61, 0x61, 0x0c, 0x00};
@@ -226,7 +222,8 @@ int main(int argc, char **argv){
 		{"sleep", required_argument, 0, 'z'},
 		{"listen", no_argument, 0, 'L'},
 		{"verbose", no_argument, 0, 'v'},
-		{"help", no_argument, 0, 'h'}
+		{"help", no_argument, 0, 'h'},
+		{0, 0, 0,  0 }
 	};
 
 	char shortopts[]= "i:s:d:c:u:U:H:y:S:D:P:4:6:n:N:x:o:Z:eC:q:X:w:W:a:A:Q:O:Ej:k:J:K:b:g:B:G:lz:Lvh";
@@ -291,13 +288,25 @@ int main(int argc, char **argv){
 				break;
 	    
 			case 'd':	/* IPv6 Destination Address */
-				if( inet_pton(AF_INET6, optarg, &(idata.dstaddr)) <= 0){
-					puts("inet_pton(): address not valid");
-					exit(EXIT_FAILURE);
+				strncpy( targetipv6.name, optarg, NI_MAXHOST);
+				targetipv6.name[NI_MAXHOST-1]= 0;
+				targetipv6.flags= AI_CANONNAME;
+
+				if( (r=get_ipv6_target(&targetipv6)) != 0){
+
+					if(r < 0){
+						printf("Unknown Destination: %s\n", gai_strerror(targetipv6.res));
+					}
+					else{
+						puts("Unknown Destination: No IPv6 address found for specified destination");
+					}
+
+					exit(1);
 				}
 
+				idata.dstaddr= targetipv6.ip6;
+				idata.dstaddr_f = TRUE;
 				type= ICMP6_NI_QUERY;
-				idata.dstaddr_f = 1;
 				break;
 
 			case 'c':	/* Hop Limit */
@@ -401,7 +410,7 @@ int main(int argc, char **argv){
 
 				hdrlen= atoi(optarg);
 		
-				if(hdrlen <= 8){
+				if(hdrlen < 8){
 					puts("Bad length in Hop-by-Hop Options Header");
 					exit(EXIT_FAILURE);
 				}
@@ -446,7 +455,7 @@ int main(int argc, char **argv){
 				}
 		
 				nfrags = (nfrags +7) & 0xfff8;
-				fragh_f= 1;
+				idata.fragh_f= 1;
 				break;
 
 			case 'S':	/* Source Ethernet address */
@@ -468,12 +477,23 @@ int main(int argc, char **argv){
 				break;
 
 			case '6':	/* Subject: IPv6 address */
+				strncpy( targetipv6.name, optarg, NI_MAXHOST);
+				targetipv6.name[NI_MAXHOST-1]= 0;
+				targetipv6.flags= AI_CANONNAME;
 
-				if ( inet_pton(AF_INET6, optarg, &ipv6addr) <= 0){
-					puts("inet_pton(): Subject Address not valid");
-					exit(EXIT_FAILURE);
+				if( (r=get_ipv6_target(&targetipv6)) != 0){
+
+					if(r < 0){
+						printf("Unknown Destination: %s\n", gai_strerror(targetipv6.res));
+					}
+					else{
+						puts("Unknown Destination: No IPv6 address found for specified destination");
+					}
+
+					exit(1);
 				}
 
+				ipv6addr= targetipv6.ip6;
 				ipv6addr_f = 1;
 				break;
 
@@ -526,12 +546,23 @@ int main(int argc, char **argv){
 				break;
 
 			case 'w':	/* Data: IPv6 address */
+				strncpy( targetipv6.name, optarg, NI_MAXHOST);
+				targetipv6.name[NI_MAXHOST-1]= 0;
+				targetipv6.flags= AI_CANONNAME;
 
-				if ( inet_pton(AF_INET6, optarg, &ipv6addrd) <= 0){
-					puts("inet_pton(): Redirected Address not valid");
-					exit(EXIT_FAILURE);
+				if( (r=get_ipv6_target(&targetipv6)) != 0){
+
+					if(r < 0){
+						printf("Unknown Destination: %s\n", gai_strerror(targetipv6.res));
+					}
+					else{
+						puts("Unknown Destination: No IPv6 address found for specified destination");
+					}
+
+					exit(1);
 				}
 
+				ipv6addrd= targetipv6.ip6;
 				ipv6addrd_f = 1;
 				break;
 
@@ -906,8 +937,8 @@ int main(int argc, char **argv){
 		exit(EXIT_FAILURE);
 	}
 
-	if(!iface_f){
-		puts("Must specify the network interface with the -i option");
+	if(listen_f && !iface_f){
+		puts("Must specify the network interface with the -i option when 'listening' mode is set");
 		exit(EXIT_FAILURE);
 	}
 
@@ -949,16 +980,11 @@ int main(int argc, char **argv){
 		}
 	}
 
-	if( !fragh_f && dstoptuhdr_f){
+	if( !idata.fragh_f && dstoptuhdr_f){
 		puts("Dst. Options Header (Unfragmentable Part) set, but Fragmentation not specified");
 		exit(EXIT_FAILURE);
 	}
     
-	if(fragh_f)
-		idata.max_packet_size = MAX_IPV6_PAYLOAD + MIN_IPV6_HLEN;
-	else
-		idata.max_packet_size = ETH_DATA_LEN;
-
 	if(sloopattack_f){
 		if(code_f && code != 1){
 			puts("Error: NI code must be '1' for performing name-loop attacks");
@@ -1014,11 +1040,6 @@ int main(int argc, char **argv){
 
 	/* Set initial contents of the attack packet */
 	init_packet_data(&idata);
-
-	if( (idata.fd= pcap_fileno(idata.pfd)) == -1){
-		puts("Error obtaining descriptor number for pcap_t");
-		exit(EXIT_FAILURE);
-	}
 
 	FD_ZERO(&sset);
 	FD_SET(idata.fd, &sset);
@@ -1099,8 +1120,13 @@ int main(int argc, char **argv){
 			}
 
 			rset= sset;
+#if !defined(sun) && !defined(__sun)
 			timeout.tv_usec=0;
 			timeout.tv_sec= nsleep;
+#else
+			timeout.tv_usec=10000;
+			timeout.tv_sec= 0;
+#endif
 
 			if((sel=select(idata.fd+1, &rset, NULL, NULL, &timeout)) == -1){
 				if(errno == EINTR){
@@ -1113,18 +1139,20 @@ int main(int argc, char **argv){
 			}
 
 			/* Read a NI Reply packet */
-			if(FD_ISSET(idata.fd, &rset)){
+#if defined(sun) || defined(__sun)
+			if(TRUE){
+#else
+			if(sel && FD_ISSET(idata.fd, &rset)){
+#endif
 				if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
 					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
 					exit(EXIT_FAILURE);
 				}
-				else if(r == 0){
-					continue; /* Should never happen */
-				}
-
-				if(print_ni_data(&idata, pktdata, pkthdr) == -1){
-					puts("Error while printing NI data");
-					exit(EXIT_FAILURE);
+				else if(r == 1){
+					if(print_ni_data(&idata, pktdata, pkthdr) == -1){
+						puts("Error while printing NI data");
+						exit(EXIT_FAILURE);
+					}
 				}
 			}
 		}
@@ -1172,8 +1200,13 @@ int main(int argc, char **argv){
 
 		while(listen_f){
 			rset= sset;
-
+#if defined(sun) || defined(__sun)
+			timeout.tv_usec=10000;
+			timeout.tv_sec= 0;
+			if((sel=select(idata.fd+1, &rset, NULL, NULL, &timeout)) == -1){
+#else
 			if((sel=select(idata.fd+1, &rset, NULL, NULL, NULL)) == -1){
+#endif
 				if(errno == EINTR){
 					continue;
 				}
@@ -1182,105 +1215,108 @@ int main(int argc, char **argv){
 					exit(EXIT_FAILURE);
 				}
 			}
+#if defined(sun) || defined(__sun)
+			if(TRUE){
+#else
+			if(sel && FD_ISSET(idata.fd, &rset)){
+#endif
+				/* Read a Neighbor Solicitation message */
+				if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
+					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
+					exit(EXIT_FAILURE);
+				}
+				else if(r == 1){
+					pkt_ether = (struct ether_header *) pktdata;
+					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
+					pkt_ni= (struct icmp6_nodeinfo *) ( (unsigned char *) pkt_ipv6 + sizeof(struct ip6_hdr));
 
-			/* Read a Neighbor Solicitation message */
-			if((r=pcap_next_ex(idata.pfd, &pkthdr, &pktdata)) == -1){
-				printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
-				exit(EXIT_FAILURE);
-			}
-			else if(r == 0){
-				continue; /* Should never happen */
-			}
+					accepted_f=0;
 
-			pkt_ether = (struct ether_header *) pktdata;
-			pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
-			pkt_ni= (struct icmp6_nodeinfo *) ( (unsigned char *) pkt_ipv6 + sizeof(struct ip6_hdr));
+					if(pkt_ni->ni_type != ICMP6_NI_QUERY){
+						continue;
+					}
 
-			accepted_f=0;
+					if(pkt_ni->ni_qtype != htons(qtype)){
+						continue;
+					}
 
-			if(pkt_ni->ni_type != ICMP6_NI_QUERY){
-				continue;
-			}
+					if(!rand_src_f){
+						if(!IN6_IS_ADDR_MC_LINKLOCAL(&(pkt_ipv6->ip6_dst)) && \
+							!is_ip6_in_address_list(&(idata.ip6_global), &(pkt_ipv6->ip6_dst)) && \
+								!is_eq_in6_addr(&(pkt_ipv6->ip6_dst), &(idata.ip6_local)))
+							continue;
+					}
 
-			if(pkt_ni->ni_qtype != htons(qtype)){
-				continue;
-			}
-
-			if(!rand_src_f){
-				if(!IN6_IS_ADDR_MC_LINKLOCAL(&(pkt_ipv6->ip6_dst)) && \
-					!is_ip6_in_address_list(&(idata.ip6_global), &(pkt_ipv6->ip6_dst)) && \
-						!is_eq_in6_addr(&(pkt_ipv6->ip6_dst), &(idata.ip6_local)))
-					continue;
-			}
-
-			if(filters.nblocklinksrc){
-				if(match_ether(filters.blocklinksrc, filters.nblocklinksrc, &(pkt_ether->src))){
-					if(idata.verbose_f > 1)
-						print_filter_result(&idata, pktdata, BLOCKED);
+					if(filters.nblocklinksrc){
+						if(match_ether(filters.blocklinksrc, filters.nblocklinksrc, &(pkt_ether->src))){
+							if(idata.verbose_f > 1)
+								print_filter_result(&idata, pktdata, BLOCKED);
 		
-					continue;
+							continue;
+						}
+					}
+
+					if(filters.nblocklinkdst){
+						if(match_ether(filters.blocklinkdst, filters.nblocklinkdst, &(pkt_ether->dst))){
+							if(idata.verbose_f > 1)
+								print_filter_result(&idata, pktdata, BLOCKED);
+		
+							continue;
+						}
+					}
+	
+					if(filters.nblocksrc){
+						if(match_ipv6(filters.blocksrc, filters.blocksrclen, filters.nblocksrc, &(pkt_ipv6->ip6_src))){
+							if(idata.verbose_f > 1)
+								print_filter_result(&idata, pktdata, BLOCKED);
+		
+							continue;
+						}
+					}
+	
+					if(filters.nblockdst){
+						if(match_ipv6(filters.blockdst, filters.blockdstlen, filters.nblockdst, &(pkt_ipv6->ip6_dst))){
+							if(idata.verbose_f > 1)
+								print_filter_result(&idata, pktdata, BLOCKED);
+		
+							continue;
+						}
+					}
+	
+					if(filters.nacceptlinksrc){
+						if(match_ether(filters.acceptlinksrc, filters.nacceptlinksrc, &(pkt_ether->src)))
+							accepted_f=1;
+					}
+
+					if(filters.nacceptlinkdst && !accepted_f){
+						if(match_ether(filters.acceptlinkdst, filters.nacceptlinkdst, &(pkt_ether->dst)))
+							accepted_f= 1;
+					}
+
+					if(filters.nacceptsrc && !accepted_f){
+						if(match_ipv6(filters.acceptsrc, filters.acceptsrclen, filters.nacceptsrc, &(pkt_ipv6->ip6_src)))
+							accepted_f= 1;
+					}
+
+					if(filters.nacceptdst && !accepted_f){
+						if(match_ipv6(filters.acceptdst, filters.acceptdstlen, filters.nacceptdst, &(pkt_ipv6->ip6_dst)))
+							accepted_f=1;
+					}
+	
+					if(filters.acceptfilters_f && !accepted_f){
+						if(idata.verbose_f > 1)
+							print_filter_result(&idata, pktdata, BLOCKED);
+
+						continue;
+					}
+
+					if(idata.verbose_f)
+						print_filter_result(&idata, pktdata, ACCEPTED);
+
+					/* Send a Neighbor Advertisement */
+					send_packet(&idata, pktdata, pkthdr);
 				}
 			}
-
-			if(filters.nblocklinkdst){
-				if(match_ether(filters.blocklinkdst, filters.nblocklinkdst, &(pkt_ether->dst))){
-					if(idata.verbose_f > 1)
-						print_filter_result(&idata, pktdata, BLOCKED);
-		
-					continue;
-				}
-			}
-	
-			if(filters.nblocksrc){
-				if(match_ipv6(filters.blocksrc, filters.blocksrclen, filters.nblocksrc, &(pkt_ipv6->ip6_src))){
-					if(idata.verbose_f > 1)
-						print_filter_result(&idata, pktdata, BLOCKED);
-		
-					continue;
-				}
-			}
-	
-			if(filters.nblockdst){
-				if(match_ipv6(filters.blockdst, filters.blockdstlen, filters.nblockdst, &(pkt_ipv6->ip6_dst))){
-					if(idata.verbose_f > 1)
-						print_filter_result(&idata, pktdata, BLOCKED);
-		
-					continue;
-				}
-			}
-	
-			if(filters.nacceptlinksrc){
-				if(match_ether(filters.acceptlinksrc, filters.nacceptlinksrc, &(pkt_ether->src)))
-					accepted_f=1;
-			}
-
-			if(filters.nacceptlinkdst && !accepted_f){
-				if(match_ether(filters.acceptlinkdst, filters.nacceptlinkdst, &(pkt_ether->dst)))
-					accepted_f= 1;
-			}
-
-			if(filters.nacceptsrc && !accepted_f){
-				if(match_ipv6(filters.acceptsrc, filters.acceptsrclen, filters.nacceptsrc, &(pkt_ipv6->ip6_src)))
-					accepted_f= 1;
-			}
-
-			if(filters.nacceptdst && !accepted_f){
-				if(match_ipv6(filters.acceptdst, filters.acceptdstlen, filters.nacceptdst, &(pkt_ipv6->ip6_dst)))
-					accepted_f=1;
-			}
-	
-			if(filters.acceptfilters_f && !accepted_f){
-				if(idata.verbose_f > 1)
-					print_filter_result(&idata, pktdata, BLOCKED);
-
-				continue;
-			}
-
-			if(idata.verbose_f)
-				print_filter_result(&idata, pktdata, ACCEPTED);
-
-			/* Send a Neighbor Advertisement */
-			send_packet(&idata, pktdata, pkthdr);
 		}
     
 		exit(EXIT_SUCCESS);
@@ -1356,7 +1392,7 @@ int	print_ni_addr(struct iface_data *idata, const u_char *pktdata, struct pcap_p
 	struct ip6_hdr 			*pkt_ipv6;
 	struct icmp6_nodeinfo	*pkt_ni;
 	unsigned char			*pkt_end;
-	u_int16_t				flags;
+	uint16_t				flags;
 	struct ni_reply_ip		*pkt_nidata;
 
 	pkt_ether = (struct ether_header *) pktdata;
@@ -1498,7 +1534,7 @@ int	print_ni_addr6(struct iface_data *idata, const u_char *pktdata, struct pcap_
 	struct ip6_hdr 			*pkt_ipv6;
 	struct icmp6_nodeinfo	*pkt_ni;
 	unsigned char			*pkt_end;
-	u_int16_t				flags;
+	uint16_t				flags;
 	struct ni_reply_ip6     *pkt_nidata;
 
 	pkt_ether = (struct ether_header *) pktdata;
@@ -1657,14 +1693,22 @@ void init_packet_data(struct iface_data *idata){
 	v6buffer = buffer + idata->linkhsize;
 	ipv6 = (struct ip6_hdr *) v6buffer;
 
-	if(idata->type == DLT_EN10MB && idata->type != IFACE_LOOPBACK){
-		ethernet->src = idata->hsrcaddr;
-		ethernet->dst = idata->hdstaddr;
+	if(idata->type == DLT_EN10MB){
 		ethernet->ether_type = htons(ETHERTYPE_IPV6);
+
+		if(!(idata->flags & IFACE_LOOPBACK)){
+			ethernet->src = idata->hsrcaddr;
+			ethernet->dst = idata->hdstaddr;
+		}
 	}
 	else if(idata->type == DLT_NULL){
 		dlt_null->family= PF_INET6;
 	}
+#if defined (__OpenBSD__)
+	else if(idata->type == DLT_LOOP){
+		dlt_null->family= htonl(PF_INET6);
+	}
+#endif
 
 	ipv6->ip6_flow=0;
 	ipv6->ip6_vfc= 0x60;
@@ -1679,7 +1723,7 @@ void init_packet_data(struct iface_data *idata){
 		hbhopthdrs=0;
 	
 		while(hbhopthdrs < nhbhopthdr){
-			if((ptr+ hbhopthdrlen[hbhopthdrs]) > (v6buffer+ ETH_DATA_LEN)){
+			if((ptr+ hbhopthdrlen[hbhopthdrs]) > (v6buffer+ idata->mtu)){
 				puts("Packet too large while processing HBH Opt. Header");
 				exit(EXIT_FAILURE);
 			}
@@ -1696,7 +1740,7 @@ void init_packet_data(struct iface_data *idata){
 		dstoptuhdrs=0;
 	
 		while(dstoptuhdrs < ndstoptuhdr){
-			if((ptr+ dstoptuhdrlen[dstoptuhdrs]) > (v6buffer+ ETH_DATA_LEN)){
+			if((ptr+ dstoptuhdrlen[dstoptuhdrs]) > (v6buffer+ idata->mtu)){
 				puts("Packet too large while processing Dest. Opt. Header (Unfrag. Part)");
 				exit(EXIT_FAILURE);
 			}
@@ -1712,12 +1756,12 @@ void init_packet_data(struct iface_data *idata){
 	/* Everything that follows is the Fragmentable Part of the packet */
 	fragpart = ptr;
 
-	if(fragh_f){
+	if(idata->fragh_f){
 		/* Check that we are able to send the Unfragmentable Part, together with a 
 		   Fragment Header and a chunk data over our link layer
 		 */
-		if( (fragpart+sizeof(fraghdr)+nfrags) > (v6buffer+ETH_DATA_LEN)){
-			puts("Unfragmentable part too large for current MTU (1500 bytes)");
+		if( (fragpart+sizeof(fraghdr)+nfrags) > (v6buffer+idata->mtu)){
+			printf("Unfragmentable part too large for current MTU (%u bytes)\n", idata->mtu);
 			exit(EXIT_FAILURE);
 		}
 
@@ -1725,7 +1769,7 @@ void init_packet_data(struct iface_data *idata){
 		   This Fragment Header will be used (an assembled with the rest of the packet by the 
 		   send_packet() function.
 		*/
-		bzero(&fraghdr, FRAG_HDR_SIZE);
+		memset(&fraghdr, 0, FRAG_HDR_SIZE);
 		*prev_nh = IPPROTO_FRAGMENT;
 		prev_nh = (unsigned char *) &fraghdr;
 	}
@@ -1832,9 +1876,9 @@ int send_packet(struct iface_data *idata, const u_char *pktdata, struct pcap_pkt
 							return(-1);
 					}
 
-					bzero(ptr, 4);
+					memset(ptr, 0, 4);
 					ptr+=4;
-					bcopy(dlpointer, ptr, dlsize);
+					memcpy(ptr, dlpointer, dlsize);
 					ptr+= dlsize;
 				}
 				else if(named_f){
@@ -1846,10 +1890,10 @@ int send_packet(struct iface_data *idata, const u_char *pktdata, struct pcap_pkt
 					}
 
 					/* The response contains a TTL, and it is set to 0 */
-					bzero(ptr, 4);
+					memset(ptr, 0, 4);
 					ptr+= 4;
 
-					bcopy(named, ptr, namedlen);
+					memcpy(ptr, named, namedlen);
 					ptr+= namedlen;
 
 					if(snamedslabel_f){
@@ -1875,7 +1919,7 @@ int send_packet(struct iface_data *idata, const u_char *pktdata, struct pcap_pkt
 					}
 
 					/* The response contains a TTL, and it is set to 0 */
-					bzero(ptr, 4);
+					memset(ptr, 0, 4);
 					ptr+= 4;
 		
 					i=fnamedlen-1; /* There is a zero-length label at the end */
@@ -1933,7 +1977,7 @@ int send_packet(struct iface_data *idata, const u_char *pktdata, struct pcap_pkt
 					}
 
 					/* The response contains a TTL, and it is set to 0 */
-					bzero(ptr, 4);
+					memset(ptr, 0, 4);
 					ptr+= 4;
 
 					*ptr= exceedpd;
@@ -1951,7 +1995,7 @@ int send_packet(struct iface_data *idata, const u_char *pktdata, struct pcap_pkt
 					}
 
 					/* The response contains a TTL, and it is set to 0 */
-					bzero(ptr, 4);
+					memset(ptr, 0, 4);
 					ptr+= 4;
 
 					for(i=0; i<payloadsize; i++){
@@ -2064,7 +2108,7 @@ int send_packet(struct iface_data *idata, const u_char *pktdata, struct pcap_pkt
 					return(-1);
 			}
 
-			bcopy(name, ptr, namelen);
+			memcpy(ptr, name, namelen);
 			ptr+= namelen;
 
 			if(snameslabel_f){
@@ -2167,9 +2211,9 @@ int send_packet(struct iface_data *idata, const u_char *pktdata, struct pcap_pkt
 					return(-1);
 			}
 
-			bzero(ptr, 4);
+			memset(ptr, 0, 4);
 			ptr+=4;
-			bcopy(slpointer, ptr, slsize);
+			memcpy(ptr, slpointer, slsize);
 			ptr+= slsize;
 		}
 	}
@@ -2177,7 +2221,7 @@ int send_packet(struct iface_data *idata, const u_char *pktdata, struct pcap_pkt
 	ni->ni_cksum = 0;
 	ni->ni_cksum = in_chksum(v6buffer, ni, ptr-(unsigned char *)ni, IPPROTO_ICMPV6);
 
-	if(!fragh_f){
+	if(!idata->fragh_f){
 		ipv6->ip6_plen = htons((ptr - v6buffer) - MIN_IPV6_HLEN);
 
 		if((nw=pcap_inject(idata->pfd, buffer, ptr - buffer)) == -1){
@@ -2259,9 +2303,9 @@ int send_packet(struct iface_data *idata, const u_char *pktdata, struct pcap_pkt
  */
 void usage(void){
     puts("usage:\n"
-	     " ni6 -i INTERFACE [-S LINK_SRC_ADDR | -R] [-D LINK-DST-ADDR] \n"
+	     " ni6 [-i INTERFACE] [-S LINK_SRC_ADDR | -R] [-D LINK-DST-ADDR] \n"
 	     "     [-s SRC_ADDR[/LEN] | -r] [-d DST_ADDR] [-c HOP_LIMIT] [-y FRAG_SIZE]\n"
-         "     [-u DST_OPT_HDR_SIZE] [-U DST_OPT_U_HDR_SIZE] [-H HBH_OPT_HDR_SIZE] \n"
+	     "     [-u DST_OPT_HDR_SIZE] [-U DST_OPT_U_HDR_SIZE] [-H HBH_OPT_HDR_SIZE] \n"
 	     "     [-P SIZE | -6 IPV6_ADDR | -4 IPV4_ADDR | -n NAME | -N LEN | -x LEN -o TYPE]\n"
 	     "     [-Z SIZE] [-e] [-C ICMP6_CODE] [-q NI_QTYPE] [-X NI_FLAGS]\n"
 	     "     [-P SIZE | -w IPV6_ADDR | -W IPV4_ADDR | -a NAME | -A LEN | -Q LEN -O TYPE]\n"
@@ -2406,7 +2450,7 @@ void print_attack_info(struct iface_data *idata){
 	for(i=0; i<ndstopthdr; i++)
 		printf("Destination Options Header: %u bytes\n", dstopthdrlen[i]);
 
-	if(fragh_f)
+	if(idata->fragh_f)
 		printf("Sending each packet in fragments of %u bytes (plus the Unfragmentable part)\n", nfrags);
 
 	if(type==ICMP6_NI_QUERY){
