@@ -6,9 +6,9 @@ Author: Octavio Alvarez <alvarezp@alvarezp.com>
 Bug-Debian: http://bugs.debian.org/739202
 Forwarded: not-needed
 
---- ipv6toolkit-1.5.3.orig/GNUmakefile
-+++ ipv6toolkit-1.5.3/GNUmakefile
-@@ -111,8 +111,8 @@ install: all
+--- a/GNUmakefile
++++ b/GNUmakefile
+@@ -131,8 +131,8 @@
  	install -m0644 data/ipv6toolkit.conf $(ETCPATH)
  
  	# Install the IEEE OUI database
@@ -17,5 +17,5 @@ Forwarded: not-needed
 +	#install -m0755 -d $(DATAPATH)
 +	#install -m0644 data/oui.txt $(DATAPATH)
  
- 	# Install the manual pages
- 	install -m0755 -d $(MANPATH)/man1
+ 	# Install the port numbers database
+ 	install -m0644 data/service-names-port-numbers.csv $(DATAPATH)
