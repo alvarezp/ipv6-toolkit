@@ -1,0 +1,31 @@
+From: Octavio Alvarez <alvarezp@alvarezp.com>
+Date: Thu, 30 Oct 2014 01:02:28 -0700
+Subject: dont-install-oui
+
+We don't ship oui.txt, don't try to install
+Debian has an ieee-data package which releases us from shipping
+IEEE's oui.txt. We need to tweak GNUmakefile so it doesn't
+attempt to install the file, or make install will fail.
+
+Author: Octavio Alvarez <alvarezp@alvarezp.com>
+Bug-Debian: http://bugs.debian.org/739202
+Forwarded: not-needed
+---
+ GNUmakefile | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/GNUmakefile b/GNUmakefile
+index a1d3d52..eb3a23c 100644
+--- a/GNUmakefile
++++ b/GNUmakefile
+@@ -131,8 +131,8 @@ ifneq ($(OS),SunOS)
+ 	install -m0644 data/ipv6toolkit.conf $(ETCPATH)
+ 
+ 	# Install the IEEE OUI database
+-	install -m0755 -d $(DATAPATH)
+-	install -m0644 data/oui.txt $(DATAPATH)
++	#install -m0755 -d $(DATAPATH)
++	#install -m0644 data/oui.txt $(DATAPATH)
+ 
+ 	# Install the port numbers database
+ 	install -m0644 data/service-names-port-numbers.csv $(DATAPATH)
