@@ -1,3 +1,4 @@
 version=3
-http://www.si6networks.com/tools/ipv6toolkit/ipv6-?toolkit-v(.+)\.tar\.gz
+opts=uversionmangle=s/(\d)[_\.\-\+]?((RC|rc|pre|dev|beta|alpha)\d*)$/$1~$2/ \
+  http://www.si6networks.com/tools/ipv6toolkit/ipv6-?toolkit-v(.+)\.tar\.gz
 
