@@ -2,6 +2,7 @@ ipv6toolkit (2.0~beta-1) unstable; urgency=low
 
   * New upstream release.
   * Notice: Will now use gbp pq for patch series.
+  * Updated Standards-Version to 3.9.6; no changes required.
   * Depend on ieee-data instead of shipping oui.txt. Closes: #739202.
   * Reverted debian/watch back to using the official website.
   * Allow beyond-numeric tarballs (like betas) in debian/watch.
