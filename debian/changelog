@@ -3,13 +3,9 @@ ipv6toolkit (2.0~beta-1) unstable; urgency=low
   * New upstream release.
   * Notice: Will now use gbp pq for patch series.
   * Depend on ieee-data instead of shipping oui.txt. Closes: #739202.
-  * Added patch because make install should not install oui.txt anymore.
-  * debian/rules: 'make' requires data/ to exist.
   * Reverted debian/watch back to using the official website.
-  * Allow beyond-numeric-versioned tarballs (like betas) in debian/watch.
-  * Mangle pre-release versions (like betas) in debian/watch.
+  * Allow beyond-numeric tarballs (like betas) in debian/watch.
   * Overridden manpage-has-errors-from-man in path6.1 because of long URL.
-  * Added patch to fix lintian warning regarding bad newline in manpage.
 
  -- Octavio Alvarez <alvarezp@alvarezp.com>  Wed, 29 Oct 2014 22:09:44 -0700
 
