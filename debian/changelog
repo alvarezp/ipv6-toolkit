@@ -1,4 +1,4 @@
-ipv6toolkit (2.0~beta-1) unstable; urgency=medium
+ipv6toolkit (2.0~beta-1) experimental; urgency=medium
 
   * New upstream release.
   * Notice: Will now use gbp pq for patch series.
