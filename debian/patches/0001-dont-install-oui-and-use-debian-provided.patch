@@ -1,23 +1,35 @@
 From: Octavio Alvarez <alvarezp@alvarezp.com>
 Date: Thu, 30 Oct 2014 01:02:28 -0700
-Subject: dont-install-oui
+Subject: dont-install-oui-and-use-debian-provided
 
 We don't ship oui.txt, don't try to install
 Debian has an ieee-data package which releases us from shipping
 IEEE's oui.txt. We need to tweak GNUmakefile so it doesn't
 attempt to install the file, or make install will fail.
 
+Also, the ipv6toolkit.conf file should point to the file
+provided by the ieee-data package, located in /var/lib/ieee-data.
+
 Author: Octavio Alvarez <alvarezp@alvarezp.com>
 Bug-Debian: http://bugs.debian.org/739202
 Forwarded: not-needed
 ---
- GNUmakefile | 4 ++--
- 1 file changed, 2 insertions(+), 2 deletions(-)
+ GNUmakefile | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
 
 diff --git a/GNUmakefile b/GNUmakefile
-index a1d3d52..eb3a23c 100644
+index a1d3d52..f6f9556 100644
 --- a/GNUmakefile
 +++ b/GNUmakefile
+@@ -109,7 +109,7 @@ libipv6.o: $(SRCPATH)/libipv6.c $(SRCPATH)/libipv6.h
+ data/ipv6toolkit.conf:
+ 	echo "# SI6 Networks' IPv6 Toolkit Configuration File" > \
+            data/ipv6toolkit.conf
+-	echo OUI-Database=$(PREFIX)/share/ipv6toolkit/oui.txt >> \
++	echo OUI-Database=/var/lib/ieee-data/oui.txt >> \
+            data/ipv6toolkit.conf 
+ 	echo Ports-Database=$(PREFIX)/share/ipv6toolkit/service-names-port-numbers.csv >> \
+            data/ipv6toolkit.conf 
 @@ -131,8 +131,8 @@ ifneq ($(OS),SunOS)
  	install -m0644 data/ipv6toolkit.conf $(ETCPATH)
  

@@ -1,2 +1,2 @@
-0001-dont-install-oui.patch
+0001-dont-install-oui-and-use-debian-provided.patch
 0002-fix-lintian-manpage-remove-bad-newline.patch
