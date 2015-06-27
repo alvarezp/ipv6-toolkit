@@ -1,3 +1,17 @@
+ipv6toolkit (2.0-1) unstable; urgency=medium
+
+  * New upstream release
+  * Moving back to unstable after Jessie's release
+  * Added support for GPG-verification of source upstream file
+  * Added .pc and backup files to .gitignore
+  * Updated lintian-overrides for manpages
+  * Refreshed patches using gbp pq export from patch-queue/debian branch
+    - Removed the fix-lintian-manpage-remove-bad-newline patch
+    - Fixed misuse of hyphen in udp6.1 as reported by lintian
+    - Fixed an undefined behavior in scan6 caught by GCC
+
+ -- Octavio Alvarez <alvarezp@alvarezp.com>  Sat, 27 Jun 2015 14:03:26 -0700
+
 ipv6toolkit (2.0~beta-1) experimental; urgency=medium
 
   * New upstream release.
