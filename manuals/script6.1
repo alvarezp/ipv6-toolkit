@@ -63,8 +63,8 @@ RANKING,DOMAIN_NAME
 .sp
 .RS 4
 .nf
-\+ It extracts the domainname from each line, and prints the 
-   corresponding domain name to standard output.
+\+ It extracts the domainname from each line, and prints the corresponding
+domain name to standard output.
 .fi
 .RE
 
@@ -159,21 +159,21 @@ This command causes the script6 tool to read from standard input the results of 
 
 Among the statistics produced by this command are:
 
-   + Packet drop rate: That is, the percentage of destination IPv6 
+   * Packet drop rate: That is, the percentage of destination IPv6 
      addresses that result unreachable if IPv6 extension headers are
      employed.
 
-   + Packet drop rate by different AS: That is, the percentage of
-     packet drops that occur at an Autonomous System (AS) other 
-     than the AS corresponding to the destination IPv6 address.
+   * Packet drop rate by different AS: That is, the percentage of packet
+     drops that occur at an Autonomous System (AS) other than the AS 
+     corresponding to the destination IPv6 address.
 
-   + Packet drop rate by same AS: That is, the percentage of packet
+   * Packet drop rate by same AS: That is, the percentage of packet
      drops that occur at the same Autonomous System (AS) as that
      corresponding to the destination IPv6 address.
 
-   + Delta\-Hops statistics: Statistics regarding the Delta-Hops at
-     which the packet drops occur, with "delta\-hops" defined as 
-     "the number of hops from the intended destination".
+   * Delta\-Hops statistics: Statistics regarding the Delta-Hops at which
+     the packet drops occur, with "delta\-hops" defined as "the number of
+     hops from the intended destination".
 
 The get-trace-stats performs a number of sanity checks on the input data (i.e., the output from "script6 trace"). For example, if a line of input indicates that the last responding node for the non-EH-enabled path6 command is not the intended destination, this means that the destination is unreachable even when no IPv6 extension headers are employed, and hence the corresponding line will be discarded.
 
@@ -225,33 +225,33 @@ The resulting output will have the following syntax:
 .sp
 .RS 4
 .nf
-    DEST#LAST_NOEH#HOPS_NOEH#LAST_EH$HOPS_EH#DROPN#DROPN2\n
+    DEST#LAST_NOEH#HOPS_NOEH#LAST_EH$HOPS_EH#DROPN#DROPN2
 .fi
 .RE
 
 where:
 
-   + DEST: Destination IPv6 address (as read from standard input). 
+   * DEST: Destination IPv6 address (as read from standard input). 
      In our example above, this would be 2001:db8:d::1.
 
-   + LAST_NOEH: Last responding IPv6 address for the path6 command 
+   * LAST_NOEH: Last responding IPv6 address for the path6 command 
      with no IPv6 extension headers (this will be the same as DEST
      if there is a working path to the destination). In our example
      above, this would be 2001:db8:d::1.
 
-   + HOPS_NOEH: Number of hops to LAST_NOEH. In our example above, 
+   * HOPS_NOEH: Number of hops to LAST_NOEH. In our example above, 
      this would be "10".
 
-   + LAST_EH: Last responding IPv6 address in the EH\-enabled path6
+   * LAST_EH: Last responding IPv6 address in the EH\-enabled path6
      command. In our example above, this would be 2001:db8:4:4000::1.
 
-   + HOPS_EH: Number of hops to LAST_EH. In our example above, this
+   * HOPS_EH: Number of hops to LAST_EH. In our example above, this
      would be "6".
 
-   + DROPN: Dropping node (M+1 in our explanation above). In our
+   * DROPN: Dropping node (M+1 in our explanation above). In our
      example above, this would be 2001:db8:4:1000::1.
 
-   + DROPN: Node after the dropping node (M+2). In our example, 
+   * DROPN: Node after the dropping node (M+2). In our example, 
      this would be 2001:db8:5:5000::1.
 
 
@@ -315,7 +315,7 @@ for SI6 Networks
 .IR <http://www.si6networks.com> .
 
 .SH COPYRIGHT
-Copyright (c) 2014 Fernando Gont.
+Copyright (c) 2014\-2015 Fernando Gont.
 
 Permission is granted to copy, distribute and/or modify this document under the terms of the GNU Free Documentation License, Version 1.3 or any later version published by the Free Software Foundation; with no Invariant Sections, no Front\-Cover Texts, and no Back\-Cover Texts.  A copy of the license is available at
 .IR <http://www.gnu.org/licenses/fdl.html> .

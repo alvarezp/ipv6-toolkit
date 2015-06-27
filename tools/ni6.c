@@ -2,7 +2,7 @@
  * ni6: A security assessment tool that exploits potential flaws
  *      in the processing of ICMPv6 Node Information messages
  *
- * Copyright (C) 2011-2014 Fernando Gont <fgont@si6networks.com>
+ * Copyright (C) 2011-2015 Fernando Gont <fgont@si6networks.com>
  *
  * Programmed by Fernando Gont for SI6 Networks <http://www.si6networks.com>
  *
@@ -1120,12 +1120,12 @@ int main(int argc, char **argv){
 			}
 
 			rset= sset;
-#if !defined(sun) && !defined(__sun)
-			timeout.tv_usec=0;
-			timeout.tv_sec= nsleep;
-#else
+#if defined(sun) || defined(__sun) || defined(__linux__)
 			timeout.tv_usec=10000;
 			timeout.tv_sec= 0;
+#else
+			timeout.tv_usec=0;
+			timeout.tv_sec= nsleep;
 #endif
 
 			if((sel=select(idata.fd+1, &rset, NULL, NULL, &timeout)) == -1){
@@ -1139,7 +1139,7 @@ int main(int argc, char **argv){
 			}
 
 			/* Read a NI Reply packet */
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 			if(TRUE){
 #else
 			if(sel && FD_ISSET(idata.fd, &rset)){
@@ -1148,7 +1148,7 @@ int main(int argc, char **argv){
 					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
 					exit(EXIT_FAILURE);
 				}
-				else if(r == 1){
+				else if(r == 1 && pktdata != NULL){
 					if(print_ni_data(&idata, pktdata, pkthdr) == -1){
 						puts("Error while printing NI data");
 						exit(EXIT_FAILURE);
@@ -1200,7 +1200,7 @@ int main(int argc, char **argv){
 
 		while(listen_f){
 			rset= sset;
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 			timeout.tv_usec=10000;
 			timeout.tv_sec= 0;
 			if((sel=select(idata.fd+1, &rset, NULL, NULL, &timeout)) == -1){
@@ -1215,7 +1215,7 @@ int main(int argc, char **argv){
 					exit(EXIT_FAILURE);
 				}
 			}
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 			if(TRUE){
 #else
 			if(sel && FD_ISSET(idata.fd, &rset)){
@@ -1225,7 +1225,7 @@ int main(int argc, char **argv){
 					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
 					exit(EXIT_FAILURE);
 				}
-				else if(r == 1){
+				else if(r == 1 && pktdata != NULL){
 					pkt_ether = (struct ether_header *) pktdata;
 					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
 					pkt_ni= (struct icmp6_nodeinfo *) ( (unsigned char *) pkt_ipv6 + sizeof(struct ip6_hdr));

@@ -1,7 +1,7 @@
 /*
  * libipv6 : An IPv6 library for Linux, Mac OS, and BSD systems
  *
- * Copyright (C) 2011-2014 Fernando Gont <fgont@si6networks.com>
+ * Copyright (C) 2011-2015 Fernando Gont <fgont@si6networks.com>
  *
  * Programmed by Fernando Gont for SI6 Networks <http://www.si6networks.com>
  *
@@ -24,8 +24,6 @@
  *
  * Please send any bug reports to Fernando Gont <fgont@si6networks.com>
  */
-
-/* #define DEBUG */
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -674,7 +672,7 @@ int find_ipv6_router_full(pcap_t *pfd, struct iface_data *idata){
 					error_f=1;
 					break;
 				}
-			}while(result==0);			
+			}while(result == 0 || pktdata == NULL);			
 
 			if(error_f)
 				break;
@@ -912,18 +910,21 @@ unsigned int match_ipv6(struct in6_addr *prefixlist, uint8_t *prefixlen, unsigne
 								struct in6_addr *ipv6addr){
 
 	unsigned int 	i, j;
-	struct in6_addr	dummyipv6;
+	struct in6_addr	dummyipv6_1, dummyipv6_2;
     
 	for(i=0; i<nprefix; i++){
-		dummyipv6 = *ipv6addr;
-		sanitize_ipv6_prefix(&dummyipv6, prefixlen[i]);
-	
+		dummyipv6_1 = *ipv6addr;
+		sanitize_ipv6_prefix(&dummyipv6_1, prefixlen[i]);
+		dummyipv6_2 = prefixlist[i];
+		sanitize_ipv6_prefix(&dummyipv6_2, prefixlen[i]);
+
 		for(j=0; j<4; j++)
-			if(dummyipv6.s6_addr32[j] != prefixlist[i].s6_addr32[j])
+			if(dummyipv6_1.s6_addr32[j] != dummyipv6_2.s6_addr32[j])
 				break;
 
 		if(j==4)
 			return 1;
+
 	}
 
 	return 0;
@@ -1186,7 +1187,7 @@ int ipv6_to_ether(pcap_t *pfd, struct iface_data *idata, struct in6_addr *target
 					error_f=1;
 					break;
 				}
-			}while(result==0);			
+			}while(result == 0 || pktdata == NULL);			
 
 			if(error_f)
 				break;	
@@ -1789,9 +1790,6 @@ void randomize_ipv6_addr(struct in6_addr *ipv6addr, struct in6_addr *prefix, uin
 
 	startrand= preflen/32;
 
-	for(i=0; i<startrand; i++)
-		ipv6addr->s6_addr32[i]= 0;
-
 	for(i=startrand; i<4; i++)
 		ipv6addr->s6_addr32[i]=random();
 
@@ -1808,6 +1806,7 @@ void randomize_ipv6_addr(struct in6_addr *ipv6addr, struct in6_addr *prefix, uin
 		ipv6addr->s6_addr32[i]= ipv6addr->s6_addr32[i] | prefix->s6_addr32[i];
 
 }
+
 
 
 /*
@@ -2410,7 +2409,7 @@ int inc_sdev(uint32_t *s, unsigned int n, uint32_t *diff_avg, double *diff_sdev)
 	if( (s2=malloc(n * sizeof(uint32_t))) == NULL)
 		return(-1);
 
-	memcpy(s2, s, n* sizeof(uint32_t));
+	memcpy(s2, s, n * sizeof(uint32_t));
 	change_endianness(s2, n);
 
 	diff2_avg= 0;
@@ -2433,11 +2432,11 @@ int inc_sdev(uint32_t *s, unsigned int n, uint32_t *diff_avg, double *diff_sdev)
 	free(s2);
 
 	if(diff1_sdev <= diff2_sdev){
-		*diff_avg= diff1_avg;
+		*diff_avg= (uint32_t) diff1_avg;
 		*diff_sdev= diff1_sdev;
 	}
 	else{
-		*diff_avg= diff2_avg;
+		*diff_avg= (uint32_t) diff2_avg;
 		*diff_sdev= diff2_sdev;
 	}
 
@@ -3830,8 +3829,9 @@ puts("Encontre loopback y voy a sobreeescribir la info de destino");
 	if(!(idata->hsrcaddr_f)){
 		if(idata->ether_flag)
 			idata->hsrcaddr=idata->ether;
-		else
+		else{
 			randomize_ether_addr(&(idata->hsrcaddr));
+		}
 	}
 
 	if(!idata->ip6_local_flag){
@@ -3840,6 +3840,11 @@ puts("Encontre loopback y voy a sobreeescribir la info de destino");
 
 	if( (idata->pfd= pcap_open_live(idata->iface, PCAP_SNAP_LEN, PCAP_PROMISC, PCAP_TIMEOUT, errbuf)) == NULL){
 		printf("pcap_open_live(%s): %s\n", idata->iface, errbuf);
+		return(FAILURE);
+	}
+
+	if (pcap_setnonblock(idata->pfd, 1, errbuf) == -1) {
+		printf("pcap_setnonblock(): %s\n", errbuf);
 		return(FAILURE);
 	}
 
@@ -4355,7 +4360,7 @@ int find_ipv6_router(pcap_t *pfd, struct ether_addr *hsrcaddr, struct in6_addr *
 				printf("pcap_next_ex(): %s", pcap_geterr(pfd));
 				exit(EXIT_FAILURE);
 			}
-			else if(r == 0){
+			else if(r == 0 || pktdata == NULL){
 				continue; /* Should never happen */
 			}
 			
