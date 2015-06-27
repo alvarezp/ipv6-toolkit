@@ -1,6 +1,6 @@
 From: Octavio Alvarez <alvarezp@alvarezp.com>
 Date: Thu, 30 Oct 2014 01:02:28 -0700
-Subject: dont-install-oui-and-use-debian-provided
+Subject: Don't install OUI and use Debian-provided
 
 We don't ship oui.txt, don't try to install
 Debian has an ieee-data package which releases us from shipping
@@ -18,10 +18,10 @@ Forwarded: not-needed
  1 file changed, 3 insertions(+), 3 deletions(-)
 
 diff --git a/GNUmakefile b/GNUmakefile
-index a1d3d52..f6f9556 100644
+index e88eb8a..70a2ccf 100644
 --- a/GNUmakefile
 +++ b/GNUmakefile
-@@ -109,7 +109,7 @@ libipv6.o: $(SRCPATH)/libipv6.c $(SRCPATH)/libipv6.h
+@@ -112,7 +112,7 @@ libipv6.o: $(SRCPATH)/libipv6.c $(SRCPATH)/libipv6.h
  data/ipv6toolkit.conf:
  	echo "# SI6 Networks' IPv6 Toolkit Configuration File" > \
             data/ipv6toolkit.conf
@@ -30,7 +30,7 @@ index a1d3d52..f6f9556 100644
             data/ipv6toolkit.conf 
  	echo Ports-Database=$(PREFIX)/share/ipv6toolkit/service-names-port-numbers.csv >> \
             data/ipv6toolkit.conf 
-@@ -131,8 +131,8 @@ ifneq ($(OS),SunOS)
+@@ -134,8 +134,8 @@ ifneq ($(OS),SunOS)
  	install -m0644 data/ipv6toolkit.conf $(ETCPATH)
  
  	# Install the IEEE OUI database

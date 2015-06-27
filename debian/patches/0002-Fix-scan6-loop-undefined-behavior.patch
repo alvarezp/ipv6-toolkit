@@ -1,0 +1,44 @@
+From: Octavio Alvarez <alvarezp@alvarezp.ods.org>
+Date: Sat, 1 Nov 2014 14:12:11 -0700
+Subject: Fix scan6 loop undefined behavior
+
+GCC detected an invocation of undefined behavior in scan6.c.
+I think the error is caused because when j==16, memory
+accessed falls outside of an s6_addr array.
+
+Author: Octavio Alvarez <alvarezp@alvarezp.com>
+Bug: https://github.com/fgont/ipv6toolkit/issues/34
+---
+ tools/scan6.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/tools/scan6.c b/tools/scan6.c
+index 3269ab4..d36e219 100644
+--- a/tools/scan6.c
++++ b/tools/scan6.c
+@@ -3917,10 +3917,10 @@ int load_smart_entries(struct scan_list *scan, struct scan_list *smart){
+ 			case IID_PATTERN_BYTES:
+ 				(scan->target[scan->ntarget])->end= (scan->target[scan->ntarget])->start;
+ 
+-				for(j=8; j<=16; j++)
++				for(j=8; j<16; j++)
+ 					(scan->target[scan->ntarget])->end.s6addr[j]= ((scan->target[scan->ntarget])->start.s6addr[j])?0xff:0x00;
+ 
+-				for(j=8; j<=16; j++)
++				for(j=8; j<16; j++)
+ 					(scan->target[scan->ntarget])->start.s6addr[j]= 0x00;
+ 
+ 				(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;
+@@ -3946,10 +3946,10 @@ int load_smart_entries(struct scan_list *scan, struct scan_list *smart){
+ 
+ 			default:
+ 				/* By default we scan for low-byte-addresses (same code as above) */
+-				for(j=8; j<=16; j++)
++				for(j=8; j<16; j++)
+ 					(scan->target[scan->ntarget])->start.s6addr[j]= 0x00;
+ 
+-				for(j=8; j<=16; j++)
++				for(j=8; j<16; j++)
+ 					(scan->target[scan->ntarget])->end.s6addr[j]= 0xff;
+ 
+ 				(scan->target[scan->ntarget])->cur= (scan->target[scan->ntarget])->start;

@@ -1,2 +1,3 @@
-0001-dont-install-oui-and-use-debian-provided.patch
-0002-fix-lintian-manpage-remove-bad-newline.patch
+0001-Don-t-install-OUI-and-use-Debian-provided.patch
+0002-Fix-scan6-loop-undefined-behavior.patch
+0003-Fix-misuse-of-hyphen-in-udp6.1-manpage.patch
