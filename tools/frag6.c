@@ -2,7 +2,7 @@
  * frag6: A security assessment tool that exploits potential flaws in the
  *        processing of IPv6 fragments
  *
- * Copyright (C) 2011-2014 Fernando Gont (fgont@si6networks.com)
+ * Copyright (C) 2011-2015 Fernando Gont (fgont@si6networks.com)
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -125,7 +125,7 @@ char 				plinkaddr[ETHER_ADDR_PLEN];
 char 				psrcaddr[INET6_ADDRSTRLEN], pdstaddr[INET6_ADDRSTRLEN], pv6addr[INET6_ADDRSTRLEN];
 unsigned char 		verbose_f=0;
 unsigned char 		floodf_f=0;
-unsigned char 		loop_f=0, sleep_f=0, localaddr_f=0, tstamp_f=1, pod_f=0;
+unsigned char 		loop_f=0, sleep_f=0, localaddr_f=0, tstamp_f=1, pod_f=0, gotresp_f= FALSE;
 unsigned char		srcprefix_f=0, hoplimit_f=0, ip6length_f=0, icmp6psize_f=0;
 unsigned char		fsize_f=0, forder_f=0, foffset_f=0, fid_f=0, fragp_f=0, fragidp_f=0, resp_f=1;
 
@@ -176,6 +176,7 @@ int main(int argc, char **argv){
 	int					r, sel;
 	time_t				curtime, start, lastfrag=0, lastfrag1=0, lastfrag2=0;
 	time_t				lastfrag3=0, lastfrag4=0, lastfrag5=0;
+	struct timeval		curtimet, startt, lastfrag1t;
 	unsigned int		responses=0, maxsizedchunk;
 
 	/* Array for storing the Fragment reassembly policy test results */
@@ -799,7 +800,7 @@ int main(int argc, char **argv){
 
 			rset= sset;
 
-#if !defined(sun) && !defined(__sun)
+#if !defined(sun) && !defined(__sun) && !defined(__linux__)
 			timeout.tv_usec=0;
 			timeout.tv_sec= 1;
 #else
@@ -817,7 +818,7 @@ int main(int argc, char **argv){
 				}
 			}
 
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 			if(TRUE){
 #else
 			if(sel && FD_ISSET(idata.fd, &rset)){
@@ -827,7 +828,7 @@ int main(int argc, char **argv){
 					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
 					exit(EXIT_FAILURE);
 				}
-				else if(r == 1){
+				else if(r == 1 && pktdata != NULL){
 					pkt_ether = (struct ether_header *) pktdata;
 					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
 					pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
@@ -924,8 +925,17 @@ int main(int argc, char **argv){
 
 		FD_ZERO(&sset);
 		FD_SET(idata.fd, &sset);
-		start= time(NULL);
-		lastfrag1=0;		
+
+		if(gettimeofday(&startt, NULL) == -1){
+			if(idata.verbose_f)
+				perror("frag6");
+
+			exit(EXIT_FAILURE);
+		}
+
+		lastfrag1t.tv_sec=0;
+		lastfrag1t.tv_usec=0;
+
 		ntest1=0;
 		ntest2=0;
 		icmp6_sig= random();
@@ -942,73 +952,78 @@ int main(int argc, char **argv){
 		}
 
 		while(1){
-			curtime=time(NULL);
+			if(gettimeofday(&curtimet, NULL) == -1){
+				if(idata.verbose_f)
+					perror("scan6");
+
+				exit(EXIT_FAILURE);
+			}
 
 			/*
 			    If we were doing tests from a single origin, and we have reached the assessment timeout
 			    or already have enough samples, we must now sample from multiple origins.
 
 			 */
-			if( testtype==FIXED_ORIGIN && ((curtime - start) >= FID_ASSESS_TIMEOUT || ntest1 >= NSAMPLES)){
+			if( testtype==FIXED_ORIGIN && (is_time_elapsed(&curtimet, &startt, FID_ASSESS_TIMEOUT * 1000000) || ntest1 >= NSAMPLES)){
 				testtype= MULTI_ORIGIN;
 				addr_sig= random();
 				addr_key= random();
-				start= curtime;
+				startt= curtimet;
 				continue;
 			}
-			else if( testtype==MULTI_ORIGIN && ((curtime - start) >= FID_ASSESS_TIMEOUT || ntest2 >= NSAMPLES)){
+			else if( testtype==MULTI_ORIGIN && (is_time_elapsed(&curtimet, &startt, FID_ASSESS_TIMEOUT * 1000000) || ntest2 >= NSAMPLES)){
 				break;
 			}
 
 			/*
-			    lastfrag1 contains the timestamp (in seconds) of the last time we sent probe packets.
-			    Hence we will be sending "batches" of probe packets every second.
+			    lastfrag1 contains the time the last time we sent probe packets. Probes are sent every
+			    FID_ASSESS_DELTA uses to avoid packet reordering.
+
+			    XXX: Eventually we should infer reordering in the sample data and order the samples if
+			         necessary.
 			 */
-			if((curtime - lastfrag1) >= 1){
+
+			if(is_time_elapsed(&curtimet, &lastfrag1t, FID_ASSESS_DELTA)){
 				if(testtype == FIXED_ORIGIN){
-					for(i=0; i< (NSAMPLES/NBATCHES); i++){
-						if(send_fid_probe(&idata) == -1){
-							puts("Error while sending packet");
-							exit(EXIT_FAILURE);
-						}
+					if(send_fid_probe(&idata) == -1){
+						puts("Error while sending packet");
+						exit(EXIT_FAILURE);
 					}
 				}
 				else{
-					for(i=0; i< (NSAMPLES/NBATCHES); i++){
-						randomize_ipv6_addr(&(idata.srcaddr), &randprefix, randpreflen);
+					randomize_ipv6_addr(&(idata.srcaddr), &randprefix, randpreflen);
 
-						/*
-						 * Two words of the Source IPv6 Address are specially encoded such that we only respond
-						 * to Neighbor Solicitations that target those addresses, and accept ICMPv6 Echo Replies
-						 * only if they are destined to those addresses
-						 */
-						idata.srcaddr.s6_addr32[2]= htonl((ntohl(idata.srcaddr.s6_addr32[2]) & 0xffff0000) | addr_sig);
-						idata.srcaddr.s6_addr32[3]= htonl((ntohl(idata.srcaddr.s6_addr32[3]) & 0xffff0000) | \
-						                            ((uint16_t)(ntohl(idata.srcaddr.s6_addr32[3])>>16) ^ addr_key));
+					/*
+					 * Two words of the Source IPv6 Address are specially encoded such that we only respond
+					 * to Neighbor Solicitations that target those addresses, and accept ICMPv6 Echo Replies
+					 * only if they are destined to those addresses
+					 */
+					idata.srcaddr.s6_addr32[2]= htonl((ntohl(idata.srcaddr.s6_addr32[2]) & 0xffff0000) | addr_sig);
+					idata.srcaddr.s6_addr32[3]= htonl((ntohl(idata.srcaddr.s6_addr32[3]) & 0xffff0000) | \
+					                            ((uint16_t)(ntohl(idata.srcaddr.s6_addr32[3])>>16) ^ addr_key));
 
-						/*
-						 * XXX This trick is innefective with OpenBSD. Hence we don't try to prevent the
-						 * first-fragment of the response packet from being dropped.
+					/*
+					 * XXX This trick is innefective with OpenBSD. Hence we don't try to prevent the
+					 * first-fragment of the response packet from being dropped.
 
-						if(send_neighbor_solicit(&idata) == -1){
-							puts("Error while sending Neighbor Solicitation");
-							exit(EXIT_FAILURE);
-						}
-						*/
+					if(send_neighbor_solicit(&idata) == -1){
+						puts("Error while sending Neighbor Solicitation");
+						exit(EXIT_FAILURE);
+					}
+					*/
 
-						if(send_fid_probe(&idata) == -1){
-							puts("Error while sending packet");
-							exit(EXIT_FAILURE);
-						}
+					if(send_fid_probe(&idata) == -1){
+						puts("Error while sending packet");
+						exit(EXIT_FAILURE);
 					}
 				}
 
-				lastfrag1=curtime;
+				lastfrag1t=curtimet;
 				continue;
 			}
 
 			rset= sset;
-#if !defined(sun) && !defined(__sun)
+#if !defined(sun) && !defined(__sun) && !defined(__linux__)
 			timeout.tv_usec=0;
 			timeout.tv_sec= 1;
 #else
@@ -1026,7 +1041,7 @@ int main(int argc, char **argv){
 				}
 			}
 
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 			if(TRUE){
 #else
 			if(sel && FD_ISSET(idata.fd, &rset)){
@@ -1036,7 +1051,7 @@ int main(int argc, char **argv){
 					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
 					exit(EXIT_FAILURE);
 				}
-				else if(r == 1){
+				else if(r == 1 && pktdata != NULL){
 					pkt_ether = (struct ether_header *) pktdata;
 					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
 					pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
@@ -1263,7 +1278,7 @@ int main(int argc, char **argv){
 		while(1){
 			curtime=time(NULL);
 
-			if(!loop_f && ((curtime - start) >= QUERY_TIMEOUT || (!resp_f && lastfrag != 0))){
+			if(!loop_f && ((curtime - start) >= QUERY_TIMEOUT || (!resp_f && lastfrag != 0) || (resp_f && gotresp_f))){
 				break;
 			}
 
@@ -1296,9 +1311,14 @@ int main(int argc, char **argv){
 			}
 
 			rset= sset;
+
+#if defined(sun) || defined(__sun) || defined(__linux__)
+			timeout.tv_usec=10000;
+			timeout.tv_sec= 0;
+#else
 			timeout.tv_usec=0;
 			timeout.tv_sec= (lastfrag+nsleep)-curtime;
-
+#endif
 			if((sel=select(idata.fd+1, &rset, NULL, NULL, &timeout)) == -1){
 				if(errno == EINTR){
 					continue;
@@ -1309,7 +1329,7 @@ int main(int argc, char **argv){
 				}
 			}
 
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 			if(TRUE){
 #else
 			if(sel && FD_ISSET(idata.fd, &rset)){
@@ -1319,7 +1339,7 @@ int main(int argc, char **argv){
 					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
 					exit(EXIT_FAILURE);
 				}
-				else if(r == 1){
+				else if(r == 1 && pktdata != NULL){
 					pkt_ether = (struct ether_header *) pktdata;
 					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
 					pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
@@ -1348,8 +1368,9 @@ int main(int argc, char **argv){
 							}
 						}
 						else if( (pkt_icmp6->icmp6_type == ICMP6_ECHO_REPLY) || (pkt_icmp6->icmp6_type == ICMP6_TIME_EXCEEDED)){
-							if( (pkt_end - (unsigned char *) pkt_icmp6) < sizeof(struct icmp6_hdr))
+							if( (pkt_end - (unsigned char *) pkt_icmp6) < sizeof(struct icmp6_hdr)){
 								continue;
+							}
 							/*
 							   Do a preliminar validation check on the ICMPv6 packet (packet size, Source Address,
 							   and Destination Address).
@@ -1360,12 +1381,16 @@ int main(int argc, char **argv){
 
 							switch(pkt_icmp6->icmp6_type){
 								case ICMP6_ECHO_REPLY:
+									gotresp_f= TRUE;
+
 									if(resp_f)
 										print_icmp6_echo(&idata, pkthdr, pktdata);
 
 									break;
 
 								case ICMP6_TIME_EXCEEDED:
+									gotresp_f= TRUE;
+
 									if(resp_f)
 										print_icmp6_timed(&idata, pkthdr, pktdata);
 
@@ -1876,7 +1901,7 @@ int send_fragment2(struct iface_data *idata, uint16_t ip6len, unsigned int id, u
  */
 int send_fragment(struct iface_data *idata, unsigned int id, unsigned int offset, unsigned int fsize, \
                   unsigned int forder, unsigned int tstamp_f){
-	time_t	tstamp;
+	uint32_t	tstamp;
 	unsigned int i;
 
 	ethernet= (struct ether_header *) buffer;
@@ -2023,24 +2048,24 @@ int send_fragment(struct iface_data *idata, unsigned int id, unsigned int offset
 		ptr+= sizeof(struct icmp6_hdr);
 		fsize-= sizeof(struct icmp6_hdr);
 
-		if(tstamp_f && fsize >= (sizeof(time_t)+sizeof(uint32_t))){
-			if((ptr+ (sizeof(time_t) + sizeof(uint32_t))) > (v6buffer+idata->max_packet_size)){
+		if(tstamp_f && fsize >= (sizeof(uint32_t)+sizeof(uint32_t))){
+			if((ptr+ (sizeof(uint32_t) + sizeof(uint32_t))) > (v6buffer+idata->max_packet_size)){
 				puts("Packet too large while inserting timestamp");
 				return(-1);
 			}
 
 			/* We include a timstamp to be able to measure the Fragment Reassembly timeout */
-			tstamp= time(NULL);
-			*(time_t *)ptr= tstamp;
-			ptr+= sizeof(time_t);
+			tstamp= (uint32_t) time(NULL);
+			*(uint32_t *)ptr= tstamp;
+			ptr+= sizeof(uint32_t);
 
 			/* We include a "checksum" such that we can tell the responses we elicit from other packets */
 			*(uint32_t *)ptr= (uint32_t)tstamp ^ 0xabcdabcd;
 			ptr+= sizeof(uint32_t);
 			
 
-			if(fsize > (sizeof(time_t)+sizeof(uint32_t)))
-				fsize-= (sizeof(time_t)+sizeof(uint32_t));
+			if(fsize > (sizeof(uint32_t)+sizeof(uint32_t)))
+				fsize-= (sizeof(uint32_t)+sizeof(uint32_t));
 			else
 				fsize=0;
 		}
@@ -2054,15 +2079,16 @@ int send_fragment(struct iface_data *idata, unsigned int id, unsigned int offset
 		icmp6->icmp6_cksum = in_chksum(v6buffer, icmp6, ptr-((unsigned char *)icmp6), IPPROTO_ICMPV6);
 	}
 	else{
+		/* XXX: Should check */
 		if(tstamp_f){
-			if((ptr+ (sizeof(time_t) + sizeof(uint32_t))) > (v6buffer+idata->max_packet_size)){
+			if((ptr+ (sizeof(uint32_t) + sizeof(uint32_t))) > (v6buffer+idata->max_packet_size)){
 				puts("Packet too large while inserting timestamp");
 				return(-1);
 			}
 
 			/* We include a timstamp to be able to measure the Fragment Reassembly timeout */
-			tstamp= time(NULL);
-			*(time_t *)ptr= tstamp;
+			tstamp= (uint32_t)time(NULL);
+			*(uint32_t *)ptr= tstamp;
 			ptr+= sizeof(time_t);
 
 			/* We include a "checksum" such that we can tell the responses we elicit from other packets */
@@ -2070,8 +2096,8 @@ int send_fragment(struct iface_data *idata, unsigned int id, unsigned int offset
 			ptr+= sizeof(uint32_t);
 			
 
-			if(fsize > (sizeof(time_t)+sizeof(uint32_t)))
-				fsize-= (sizeof(time_t)+sizeof(uint32_t));
+			if(fsize > (sizeof(uint32_t)+sizeof(uint32_t)))
+				fsize-= (sizeof(uint32_t)+sizeof(uint32_t));
 			else
 				fsize=0;
 		}
@@ -2400,7 +2426,8 @@ int valid_icmp6_response(struct iface_data *idata, struct pcap_pkthdr *pkthdr, c
 
 			if(tstamp_f){
 				pkt_ptr= ((unsigned char *) pkt_icmp6+ sizeof(struct icmp6_hdr));
-				if( *(uint32_t *) pkt_ptr != (*(uint32_t *) (pkt_ptr+sizeof(uint32_t)) ^ 0xabcdabcd)){
+
+				if( *((uint32_t *) pkt_ptr) != (*((uint32_t *) (pkt_ptr+sizeof(uint32_t))) ^ 0xabcdabcd)){
 					return 0;
 				}
 			}

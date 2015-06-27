@@ -3,7 +3,7 @@
 #endif
 
 #include <netdb.h>
-
+#include <net/if.h>  /* For  IFNAMSIZ */
 
 /* General constants */
 #define SUCCESS		1
@@ -45,7 +45,7 @@
 #define MIN_DST_OPT_HDR_SIZE	8
 #define MAX_SLLA_OPTION			100
 #define MAX_TLLA_OPTION			256
-#define IFACE_LENGTH			255
+#define IFACE_LENGTH			IFNAMSIZ
 #define ALL_NODES_MULTICAST_ADDR	"FF02::1"
 #define ALL_ROUTERS_MULTICAST_ADDR	"FF02::2"
 #define LOOPBACK_ADDR				"::1"
@@ -135,10 +135,17 @@ struct filters{
 #define PCAP_UDPV6_FILTER		"ip6 and udp"
 #define PCAP_ICMPV6_FILTER		"icmp6"
 #define PCAP_ICMPV6_NA_FILTER	"icmp6 and ip6[7]==255 and ip6[40]==136 and ip6[41]==0"
+
+/* XXX: Should check the na6 code: we fail to receive packets (Ubuntu, at least) when this filter is set
 #define PCAP_ICMPV6_NS_FILTER  "icmp6 and ((ip6[7]==255 and ip6[40]==135 and ip6[41]==0) or ip6[40]==4)"
+*/
+
+#define PCAP_ICMPV6_NS_FILTER  "ip6"
 #define PCAP_ICMPV6_RA_FILTER "icmp6 and ip6[7]==255 and ip6[40]==134 and ip6[41]==0"
 #define PCAP_ICMPV6_RANS_FILTER	"icmp6 and ip6[7]==255 and ((ip6[40]==134 and ip6[41]==0) or (ip6[40]==135 and ip6[41]==0))"
 #define PCAP_TCPIPV6_NS_FILTER	"ip6 and (tcp or (icmp6 and ip6[7]==255 and ip6[40]==135 and ip6[41]==0))"
+/* #define PCAP_TCPIPV6_NS_FILTER	"ip6" */
+#define PCAP_UDPIPV6_NS_FILTER	"ip6 and (udp or (icmp6 and ip6[7]==255 and ip6[40]==135 and ip6[41]==0))"
 #define PCAP_ICMPV6_NI_QUERY	"icmp6 and ip6[40]==139"
 #define PCAP_ICMPV6_NI_REPLY	"icmp6 and ip6[40]==140"
 #define PCAP_NOPACKETS_FILTER	"not ip and not ip6 and not arp"
@@ -158,6 +165,19 @@ struct filters{
 */
 
 #define PCAP_TCPIPV6_FILTER "ip6 and tcp"
+
+/* Originally from scan6.h */
+#define PCAP_ICMPV6_NA_FILTER		"icmp6 and ip6[7]==255 and ip6[40]==136 and ip6[41]==0"
+#define PCAP_ICMPV6_RANS_FILTER		"icmp6 and ip6[7]==255 and ((ip6[40]==134 and ip6[41]==0) or (ip6[40]==135 and ip6[41]==0))"
+#define PCAP_ICMPV6_ERNS_FILTER		"icmp6 and ((ip6[40]==129 and ip6[41]==0) or (ip6[40]==135 and ip6[41]==0))"
+#define PCAP_ICMPV6_ERRORNS_FILTER	"icmp6 and ((ip6[40]==4) or (ip6[40]==135 and ip6[41]==0))"
+
+#define PCAP_ICMPV6_ERQNSNA_FILTER	"icmp6 and ((ip6[40]==129 and ip6[41]==0) or ((ip6[40]==135 or ip6[40]==136) and ip6[41]==0 and ip6[7]==255))"
+#define PCAP_ICMPV6_ERRORNSNA_FILTER	"icmp6 and ((ip6[40]==4) or ((ip6[7]==255 and ip6[41]==0) and (ip6[40]==135 or ip6[40]==136)))"
+#define PCAP_TCP_NSNA_FILTER		"(ip6 and tcp) or (icmp6 and ip6[7]==255 and ip6[41]==0 and (ip6[40]==135 or ip6[40]==136))"
+#define PCAP_UDP_NSNA_FILTER		"(ip6 and (udp or icmp6)) or (icmp6 and ip6[7]==255 and ip6[41]==0 and (ip6[40]==135 or ip6[40]==136))"
+#define PCAP_TCP_UDP_NSNA_FILTER	"(ip6 and (tcp or udp or icmp6)) or (icmp6 and ip6[7]==255 and ip6[41]==0 and (ip6[40]==135 or ip6[40]==136))"
+
 
 
 
@@ -371,6 +391,21 @@ struct tcp_hdr {
 	uint16_t th_urp;			/* urgent pointer */
 };
 
+/*
+  0      7 8     15 16    23 24    31  
+ +--------+--------+--------+--------+ 
+ |     Source      |   Destination   | 
+ |      Port       |      Port       | 
+ +--------+--------+--------+--------+ 
+ |                 |                 | 
+ |     Length      |    Checksum     | 
+ +--------+--------+--------+--------+ 
+ |                                     
+ |          data octets ...            
+ +---------------- ...                 
+
+     User Datagram Header Format
+*/
 
 struct udp_hdr{
   uint16_t uh_sport;		/* source port */
@@ -378,6 +413,62 @@ struct udp_hdr{
   uint16_t uh_ulen;		/* udp length */
   uint16_t uh_sum;		/* udp checksum */
 } __attribute__ ((__packed__));
+
+
+
+/* Definition of the Authentication Header
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   | Next Header   |  Payload Len  |          RESERVED             |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                 Security Parameters Index (SPI)               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                    Sequence Number Field                      |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   +                Integrity Check Value-ICV (variable)           |
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ */
+struct ah_hdr{
+	uint8_t ah_nxt;		/* Next Header */
+	uint8_t ah_len;		/* Payload length */
+	uint16_t ah_rsvd;	/* Reserved */
+	uint32_t ah_spi;	/* Reserved */
+	uint32_t ah_seq;	/* Reserved */
+	uint32_t ah_icv;	/* Integrity Check Value - ICV */
+} __attribute__ ((__packed__));
+
+
+/* Definition of the Encapsulating Security Payload
+
+  0                   1                   2                   3
+  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ ----
+ |               Security Parameters Index (SPI)                 | ^Int.
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |Cov-
+ |                      Sequence Number                          | |ered
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ | ----
+ |                    Payload Data* (variable)                   | |   ^
+ ~                                                               ~ |   |
+ |                                                               | |Conf.
+ +               +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |Cov-
+ |               |     Padding (0-255 bytes)                     | |ered*
+ +-+-+-+-+-+-+-+-+               +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ |   |
+ |                               |  Pad Length   | Next Header   | v   v
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+ ------
+ |         Integrity Check Value-ICV   (variable)                |
+ ~                                                               ~
+ |                                                               |
+ +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ */
+struct esp_hdr{
+	uint32_t esp_spi;	/* Reserved */
+	uint32_t esp_seq;	/* Reserved */
+	uint32_t ah_payload;	/* Integrity Check Value - ICV */
+} __attribute__ ((__packed__));
+
 
 
 #define	ARP_REQUEST		1

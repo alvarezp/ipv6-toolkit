@@ -2,7 +2,7 @@
  * rd6: A security assessment tool that exploits potential flaws in the
  *      processing of ICMPv6 Redirect messages
  *
- * Copyright (C) 2011-2014 Fernando Gont
+ * Copyright (C) 2011-2015 Fernando Gont
  *
  * Programmed by Fernando Gont for SI6 Networks <http://www.si6networks.com>
  *
@@ -162,7 +162,7 @@ int main(int argc, char **argv){
 	char				*endptr; /* Used by strtoul() */
 	int					r, sel;
 	fd_set				sset, rset;
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 	struct timeval		timeout;
 #endif
 	struct target_ipv6	targetipv6;
@@ -1204,7 +1204,7 @@ int main(int argc, char **argv){
 
 
 	/*
-	   Set filter for IPv6 packets (find_ipv6_router() set its own filter fore receiving RAs)
+	   Set filter for IPv6 packets (find_ipv6_router() set its own filters before receiving RAs)
 	 */
 	if(pcap_compile(idata.pfd, &pcap_filter, PCAP_IPV6_FILTER, PCAP_OPT, PCAP_NETMASK_UNKNOWN) == -1){
 		printf("pcap_compile(): %s", pcap_geterr(idata.pfd));
@@ -1252,8 +1252,8 @@ int main(int argc, char **argv){
 		while(idata.listen_f){
 			rset= sset;
 
-#if defined(sun) || defined(__sun)
-			timeout.tv_usec=10000;
+#if defined(sun) || defined(__sun) || defined(__linux__)
+			timeout.tv_usec=1000;
 			timeout.tv_sec= 0;
 			if((sel=select(idata.fd+1, &rset, NULL, NULL, &timeout)) == -1){
 #else
@@ -1268,7 +1268,7 @@ int main(int argc, char **argv){
 				}
 			}
 
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 			if(TRUE){
 #else
 			if(FD_ISSET(idata.fd, &rset)){
@@ -1278,7 +1278,7 @@ int main(int argc, char **argv){
 					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
 					exit(EXIT_FAILURE);
 				}
-				else if(r == 1){
+				else if(r == 1 && pktdata != NULL){
 					pkt_ether = (struct ether_header *) pktdata;
 					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + ETHER_HDR_LEN);
 
@@ -1608,7 +1608,8 @@ void send_packet(struct iface_data *idata, const u_char *pktdata, struct pcap_pk
 					 */
 					randomize_ipv6_addr(&(rd->nd_rd_target), &targetaddr, targetpreflen);
 				}
-				else if(makeonlink_f && floodr_f){
+				else if(makeonlink_f){
+					/* Code used to check for makeonlink_f && floodr_f */
 					/* The target field contains the address specified by the "-t" option. 
 					   Otherwise (if we must make the address "on-link", the ND target field 
 					   is set to the same value as the RD Destination Address
@@ -1981,8 +1982,6 @@ void print_help(void){
  */
  
 void print_attack_info(struct iface_data *idata){
-	puts( "rd6 version 1.1\nAssessment tool for attack vectors based on Redirect messages\n\n");
-
 	if(makeonlink_f)
 		puts("Making nodes on-link (setting the RD Target Address to the RD Destination Address)");
 

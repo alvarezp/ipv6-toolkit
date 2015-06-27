@@ -2,7 +2,7 @@
  * ra6: A security assessment tool for attack vectors based on 
  *      ICMPv6 Router Advertisement messages
  *
- * Copyright (C) 2009-2014 Fernando Gont
+ * Copyright (C) 2009-2015 Fernando Gont
  *
  * Programmed by Fernando Gont for SI6 Networks <http://www.si6networks.com>
  *
@@ -156,9 +156,10 @@ int main(int argc, char **argv){
 	extern char		*optarg;	
 	int				r, sel;
 	fd_set			sset, rset;
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 	struct timeval		timeout;
 #endif
+	struct target_ipv6	targetipv6;
 
 	static struct option longopts[] = {
 		{"interface", required_argument, 0, 'i'},
@@ -274,11 +275,23 @@ int main(int argc, char **argv){
 				break;
 	    
 			case 'd':	/* IPv6 Destination Address */
-				if( inet_pton(AF_INET6, optarg, &(idata.dstaddr)) <= 0){
-					puts("inet_pton(): address not valid");
-					exit(EXIT_FAILURE);
+				strncpy( targetipv6.name, optarg, NI_MAXHOST);
+				targetipv6.name[NI_MAXHOST-1]= 0;
+				targetipv6.flags= AI_CANONNAME;
+
+				if( (r=get_ipv6_target(&targetipv6)) != 0){
+
+					if(r < 0){
+						printf("Unknown Destination: %s\n", gai_strerror(targetipv6.res));
+					}
+					else{
+						puts("Unknown Destination: No IPv6 address found for specified destination");
+					}
+
+					exit(1);
 				}
-		
+
+				idata.dstaddr= targetipv6.ip6;
 				idata.dstaddr_f = 1;
 				break;
 
@@ -1044,19 +1057,25 @@ int main(int argc, char **argv){
 	   If the IPv6 Source Address has not been specified, and the "-F" (flood) option has
 	   not been specified, select a random link-local unicast address.
 	 */
-	if(!idata.srcaddr_f && !floods_f){
+
+	if(!(idata.srcaddr_f) && !floods_f){
 		/* When randomizing a link-local IPv6 address, select addresses that belong to the
 		   prefix fe80::/64 (that's what a link-local address looks-like in legitimate cases).
 		   The KAME implementation discards addresses in which the second high-order 16 bits
 		   (srcaddr.s6_addr16[1] in our case) are not zero.
 		 */  
 
-		if ( inet_pton(AF_INET6, "fe80::", &(idata.srcaddr)) <= 0){
-			puts("inet_pton(): Error when converting address");
-			exit(EXIT_FAILURE);
+		if(idata.ip6_local_flag){
+			idata.srcaddr= idata.ip6_local;
 		}
+		else{
+			if ( inet_pton(AF_INET6, "fe80::", &(idata.srcaddr)) <= 0){
+				puts("inet_pton(): Error when converting address");
+				exit(EXIT_FAILURE);
+			}
 
-		randomize_ipv6_addr(&(idata.srcaddr), &(idata.srcaddr), 64);
+			randomize_ipv6_addr(&(idata.srcaddr), &(idata.srcaddr), 64);
+		}
 	}
 
 	/*
@@ -1078,10 +1097,6 @@ int main(int argc, char **argv){
 		    puts("inet_pton(): address not valid");
 		    exit(EXIT_FAILURE);
 		}
-
-	if(!idata.hsrcaddr_f)		/* Source link-layer address is randomized by default */
-		for(i=0; i<6; i++)
-	 		idata.hsrcaddr.a[i]= random();
 
 	if(!idata.hdstaddr_f)		/* Destination link-layer address defaults to all-nodes */
 		if(ether_pton(ETHER_ALLNODES_LINK_ADDR, &(idata.hdstaddr), sizeof(idata.hdstaddr)) == 0){
@@ -1180,7 +1195,7 @@ int main(int argc, char **argv){
 
 		while(listen_f){
 			rset= sset;
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 			timeout.tv_usec=10000;
 			timeout.tv_sec= 0;
 			if((sel=select(idata.fd+1, &rset, NULL, NULL, &timeout)) == -1){
@@ -1196,7 +1211,7 @@ int main(int argc, char **argv){
 				}
 			}
 
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 			if(TRUE){
 #else
 			if(FD_ISSET(idata.fd, &rset)){
@@ -1206,7 +1221,7 @@ int main(int argc, char **argv){
 					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
 					exit(EXIT_FAILURE);
 				}
-				else if(r == 1){
+				else if(r == 1 && pktdata != NULL){
 					pkt_ether = (struct ether_header *) pktdata;
 					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + ETHER_HDR_LEN);
 					pkt_rs = (struct nd_router_solicit *) ((char *) pkt_ipv6 + MIN_IPV6_HLEN);
@@ -1870,48 +1885,47 @@ void print_help(void){
  */
 
 void print_attack_info(struct iface_data *idata){
-    if(!floods_f){
-	if(ether_ntop(&(idata->hsrcaddr), plinkaddr, sizeof(plinkaddr)) == 0){
-	    puts("ether_ntop(): Error converting address");
-	    exit(EXIT_FAILURE);
-	}
+	if(!floods_f){
+		if(ether_ntop(&(idata->hsrcaddr), plinkaddr, sizeof(plinkaddr)) == 0){
+			puts("ether_ntop(): Error converting address");
+			exit(EXIT_FAILURE);
+		}
 
-	printf("Ethernet Source Address: %s%s\n", plinkaddr, ((!idata->hsrcaddr_f)?" (randomized)":""));
-    }
-    else{
-	if(idata->hsrcaddr_f){
-	    if(ether_ntop(&(idata->hsrcaddr), plinkaddr, sizeof(plinkaddr)) == 0){
-		puts("ether_ntop(): Error converting address");
-		exit(EXIT_FAILURE);
-	    }
-
-	    printf("Ethernet Source Address: %s\n", plinkaddr);
+		printf("Ethernet Source Address: %s%s\n", plinkaddr, ((!idata->hsrcaddr_f)?" (automatically-selected)":""));
 	}
-	else
-	    puts("Ethernet Source Address: randomized for each packet");
-    }
+	else{
+		if(idata->hsrcaddr_f){
+			if(ether_ntop(&(idata->hsrcaddr), plinkaddr, sizeof(plinkaddr)) == 0){
+				puts("ether_ntop(): Error converting address");
+				exit(EXIT_FAILURE);
+			}
+
+			printf("Ethernet Source Address: %s\n", plinkaddr);
+		}
+		else
+			puts("Ethernet Source Address: automatically-selected");
+	}
 
     /* Ethernet Destination Address only used if a target IPv6 address or a target Ethernet
      * address were specified
      */
-    if(idata->dstaddr_f || idata->hdstaddr_f){
-	if(ether_ntop(&(idata->hdstaddr), phdstaddr, sizeof(phdstaddr)) == 0){
-	    puts("ether_ntop(): Error converting address");
-	    exit(EXIT_FAILURE);
-	}
+	if(idata->dstaddr_f || idata->hdstaddr_f){
+		if(ether_ntop(&(idata->hdstaddr), phdstaddr, sizeof(phdstaddr)) == 0){
+			puts("ether_ntop(): Error converting address");
+			exit(EXIT_FAILURE);
+		}
 
-	printf("Ethernet Destination Address: %s%s\n", phdstaddr, \
+		printf("Ethernet Destination Address: %s%s\n", phdstaddr, \
 					((!idata->hdstaddr_f)?" (all-nodes multicast)":""));
     }
-
 
 	if(inet_ntop(AF_INET6, &(idata->srcaddr), psrcaddr, sizeof(psrcaddr)) == NULL){
 		puts("inet_ntop(): Error converting IPv6 Source Address to presentation format");
 		exit(EXIT_FAILURE);
 	}
 
-    if(!floods_f){
-	printf("IPv6 Source Address: %s%s\n", psrcaddr, ((!idata->srcaddr_f)?" (randomized)":""));
+    if(!floods_f && !(idata->srcprefix_f)){
+		printf("IPv6 Source Address: %s%s\n", psrcaddr, ((!idata->srcaddr_f)?" (automatically-selected)":""));
     }
     else{
     	printf("IPv6 Source Address: randomized, from the %s/%u prefix%s\n", psrcaddr, idata->srcpreflen, \

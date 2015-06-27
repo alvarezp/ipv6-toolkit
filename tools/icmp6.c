@@ -2,7 +2,7 @@
  * icmp6: A security assessment tool that exploits potential flaws
  *        in the processing of ICMPv6 Error messages
  *
- * Copyright (C) 2011-2014 Fernando Gont <fgont@si6networks.com>
+ * Copyright (C) 2011-2015 Fernando Gont <fgont@si6networks.com>
  *
  * Programmed by Fernando Gont for SI6 Networks <http://www.si6networks.com>
  *
@@ -1252,7 +1252,7 @@ int main(int argc, char **argv){
 					printf("pcap_next_ex(): %s", pcap_geterr(idata.pfd));
 					exit(EXIT_FAILURE);
 				}
-				else if(r == 1){
+				else if(r == 1 && pktdata != NULL){
 					pkt_ether = (struct ether_header *) pktdata;
 					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
 

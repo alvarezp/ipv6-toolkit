@@ -1,7 +1,7 @@
 /*
  * scan6: An IPv6 Scanning Tool
  *
- * Copyright (C) 2011-2014 Fernando Gont <fgont@si6networks.com>
+ * Copyright (C) 2011-2015 Fernando Gont <fgont@si6networks.com>
  *
  * Programmed by Fernando Gont for SI6 Networks <http://www.si6networks.com>
  *
@@ -1212,14 +1212,14 @@ int main(int argc, char **argv){
 				break;
 
 			case 'B':
-				if(strncmp("ipv4-all", optarg, MAX_LINE_SIZE) == 0){
+				if(strncmp("ipv4-all", optarg, MAX_LINE_SIZE) == 0 || strncmp("all", optarg, MAX_LINE_SIZE) == 0){
 					tgt_ipv4mapped32_f=TRUE;
 					tgt_ipv4mapped64_f=TRUE;
 				}
-				else if(strncmp("ipv4-32", optarg, MAX_LINE_SIZE) == 0){
+				else if(strncmp("ipv4-32", optarg, MAX_LINE_SIZE) == 0 || strncmp("32", optarg, MAX_LINE_SIZE) == 0){
 					tgt_ipv4mapped32_f=TRUE;
 				}
-				else if(strncmp("ipv4-64", optarg, MAX_LINE_SIZE) == 0){
+				else if(strncmp("ipv4-64", optarg, MAX_LINE_SIZE) == 0 || strncmp("64", optarg, MAX_LINE_SIZE) == 0){
 					tgt_ipv4mapped64_f=TRUE;
 				}
 				else{
@@ -1830,7 +1830,7 @@ int main(int argc, char **argv){
 					timeout.tv_usec= pktinterval % 1000000;
 				}
 				else{
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 					timeout.tv_sec= pktinterval / 1000000 ;	
 					timeout.tv_usec= pktinterval % 1000000;
 #else
@@ -1867,7 +1867,7 @@ int main(int argc, char **argv){
 					}
 				}
 
-#if !defined(sun) && !defined(__sun)
+#if !defined(sun) && !defined(__sun) && !defined(__linux__)
 				/*
 				   If we didn't check for writeability in the previous call to select(), we must do it now. Otherwise, we might
 				   block when trying to send a packet.
@@ -1893,7 +1893,7 @@ int main(int argc, char **argv){
 #endif
 
 
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 				if(TRUE){
 #else
 				if(sel && FD_ISSET(idata.fd, &rset)){
@@ -1908,7 +1908,7 @@ int main(int argc, char **argv){
 						exit(EXIT_FAILURE);
 					}
 
-					if(result == 1){
+					if(result == 1 && pktdata != NULL){
 						pkt_ether = (struct ether_header *) pktdata;
 						pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
 						pkt_end = (unsigned char *) pktdata + pkthdr->caplen;
@@ -2072,7 +2072,7 @@ int main(int argc, char **argv){
 					continue;
 				}
 
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 				if(!donesending_f && idata.pending_write_f){
 #else
 				if(!donesending_f && idata.pending_write_f && FD_ISSET(idata.fd, &wset)){
@@ -2322,7 +2322,7 @@ int main(int argc, char **argv){
 				timeout.tv_usec= pktinterval % 1000000;
 			}
 			else{
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 				timeout.tv_sec= pktinterval / 1000000 ;	
 				timeout.tv_usec= pktinterval % 1000000;
 #else
@@ -2338,7 +2338,7 @@ puts("Prior to select()");
 				Check for readability and exceptions. We only check for writeability if there is pending data
 				to send (the pcap descriptor will usually be writeable!).
 			 */
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 			if((sel=select(0, NULL, NULL, NULL, &timeout)) == -1){
 #else
 			if((sel=select(idata.fd+1, &rset, (idata.pending_write_f?&wset:NULL), &eset, &timeout)) == -1){
@@ -2386,7 +2386,7 @@ puts("After select()");
 			   If we didn't check for writeability in the previous call to select(), we must do it now. Otherwise, we might
 			   block when trying to send a packet.
 			 */
-#if !(defined(sun) || defined(__sun))
+#if !(defined(sun) || defined(__sun) || defined(__linux__))
 #ifdef DEBUG
 puts("Prior secondary select()");
 #endif
@@ -2414,7 +2414,7 @@ puts("After secondary select()");
 #endif
 #endif
 
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 			if(TRUE){
 #else
 			if(sel && FD_ISSET(idata.fd, &rset)){
@@ -2434,7 +2434,7 @@ puts("Prior to pcap_next_ex()");
 #ifdef DEBUG
 puts("After to pcap_next_ex()");
 #endif
-				if(result == 1){
+				if(result == 1 && pktdata != NULL){
 					pkt_ether = (struct ether_header *) pktdata;
 					pkt_ipv6 = (struct ip6_hdr *)((char *) pkt_ether + idata.linkhsize);
 					pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
@@ -2578,7 +2578,7 @@ puts("After to send_neighbor_advert()");
 				continue;
 			}
 
-#if defined(sun) || defined(__sun)
+#if defined(sun) || defined(__sun) || defined(__linux__)
 			if(!donesending_f && idata.pending_write_f){
 #else
 			if(!donesending_f && idata.pending_write_f && FD_ISSET(idata.fd, &wset)){
@@ -2622,7 +2622,7 @@ puts("After to send_neighbor_advert()");
 #ifdef DEBUG
 puts("Prior to checking eset");
 #endif
-#if !(defined(sun) || defined(__sun))
+#if !(defined(sun) || defined(__sun) || defined(__linux__))
 			if(FD_ISSET(idata.fd, &eset)){
 				if(idata.verbose_f)
 					puts("scan6: Found exception on libpcap descriptor");
@@ -4724,7 +4724,7 @@ int multi_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *src
 					error_f=TRUE;
 					break;
 				}
-			}while(result==0);			
+			}while(result == 0 || pktdata == NULL);			
 
 			if(error_f)
 				break;
@@ -5044,7 +5044,7 @@ int host_scan_local(pcap_t *pfd, struct iface_data *idata, struct in6_addr *srca
 					error_f=TRUE;
 					break;
 				}
-			}while(result==0);			
+			}while(result == 0 || pktdata == NULL);			
 
 			if(error_f)
 				break;		
