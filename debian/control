@@ -1,6 +1,6 @@
 Source: ipv6toolkit
 Section: net
-Priority: extra
+Priority: optional
 Maintainer: Octavio Alvarez <alvarezp@alvarezp.com>
 Build-Depends: debhelper (>= 8.0.0), libpcap-dev
 Standards-Version: 4.5.0
