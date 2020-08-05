@@ -1,0 +1,34 @@
+From: Octavio Alvarez <octalgl@alvarezp.org>
+Date: Tue, 4 Aug 2020 17:02:31 -0500
+Subject: Silence misleading indentation warnings
+
+It's too many warnings to pursue one by one and the upstream patch
+was made over current code so backporting it may break our version
+of the software.
+
+Considering that upstream has already fixed this [1] for next release,
+I am just going with -fno-misleading-indentation options.
+
+[1] https://github.com/fgont/ipv6toolkit/commit/0cb96ae8ed5886aba060c7cbd97830a1b8306581
+
+Author: Octavio Alvarez <alvarezp@alvarezp.com>
+Bug: https://github.com/fgont/ipv6toolkit/issues/51
+Forwarded: not-needed
+Last-Update: 2020-08-04
+---
+ GNUmakefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/GNUmakefile b/GNUmakefile
+index 19f1306..a76a660 100644
+--- a/GNUmakefile
++++ b/GNUmakefile
+@@ -19,7 +19,7 @@
+ 
+ 
+ CC= gcc
+-CFLAGS+= -Wall -Wno-address-of-packed-member -Wno-missing-braces
++CFLAGS+= -Wall -Wno-address-of-packed-member -Wno-missing-braces -Wno-misleading-indentation
+ LDFLAGS+= -lpcap -lm
+ 
+ ifeq ($(shell uname),SunOS)

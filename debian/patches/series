@@ -1,3 +1,7 @@
 0001-Don-t-install-OUI-and-use-Debian-provided.patch
 0002-Fix-scan6-loop-undefined-behavior.patch
 0003-Fix-misuse-of-hyphen-in-udp6.1-manpage.patch
+0004-Allow-compilation-under-GCC-10.patch
+0005-Silence-compiler-warnings.patch
+0006-Silence-misleading-indentation-warnings.patch
+0007-strncpy-len-must-include-the-terminating-nul-byte.patch

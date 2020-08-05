@@ -1,0 +1,35 @@
+From: Octavio Alvarez <octalgl@alvarezp.org>
+Date: Mon, 27 Jul 2020 20:00:16 -0500
+Subject: strncpy len must include the terminating nul byte
+
+A mistake was spotted by -Wstringop-truncation: the length parameter
+for strncpy() was set as if the null terminator on the string was not
+to be included in the count. The manpage says otherwise:
+
+> Warning: If there is no null byte among the first n bytes of src,
+> the string placed in dest will not be null-terminated.
+
+So, the correct way to go is to include the null-terminating character
+in n.
+
+Author: Octavio Alvarez <alvarezp@alvarezp.com>
+Bug: https://github.com/fgont/ipv6toolkit/issues/63
+Forwarded: https://github.com/fgont/ipv6toolkit/pull/64
+Last-Update: 2020-07-27
+---
+ tools/libipv6.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/libipv6.c b/tools/libipv6.c
+index 2765591..5941c57 100644
+--- a/tools/libipv6.c
++++ b/tools/libipv6.c
+@@ -3517,7 +3517,7 @@ int sel_src_addr(struct iface_data *idata){
+ 							idata->ether_flag= cif->ether_f;
+ 							idata->ifindex= idata->nhifindex;
+ 							idata->flags= cif->flags;
+-							strncpy(idata->iface, idata->nhiface, IFACE_LENGTH-1);
++							strncpy(idata->iface, idata->nhiface, IFACE_LENGTH);
+ 
+ 							if((cif->ip6_local).nprefix){
+ 								idata->ip6_local= (cif->ip6_local).prefix[0]->ip6;

@@ -1,0 +1,44 @@
+From: Octavio Alvarez <octalgl@alvarezp.org>
+Date: Tue, 4 Aug 2020 22:57:15 -0500
+Subject: Silence compiler warnings
+
+Patches backported from these two upstream commits:
+
+https://github.com/fgont/ipv6toolkit/commit/15215b29bd91a9baafabd1ca75dd2e1674e302fa
+https://github.com/fgont/ipv6toolkit/commit/0cb96ae8ed5886aba060c7cbd97830a1b8306581
+
+Upstream went with -fno-* options.
+
+Origin: upstream, https://github.com/fgont/ipv6toolkit/commit/15215b29bd91a9baafabd1ca75dd2e1674e302fa
+Last-Update: 2020-04-16
+---
+ GNUmakefile | 2 +-
+ Makefile    | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/GNUmakefile b/GNUmakefile
+index 70a2ccf..19f1306 100644
+--- a/GNUmakefile
++++ b/GNUmakefile
+@@ -19,7 +19,7 @@
+ 
+ 
+ CC= gcc
+-CFLAGS+= -Wall
++CFLAGS+= -Wall -Wno-address-of-packed-member -Wno-missing-braces
+ LDFLAGS+= -lpcap -lm
+ 
+ ifeq ($(shell uname),SunOS)
+diff --git a/Makefile b/Makefile
+index a9c274f..959c257 100644
+--- a/Makefile
++++ b/Makefile
+@@ -19,7 +19,7 @@
+ 
+ 
+ CC?=gcc
+-CFLAGS+= -Wall
++CFLAGS+= -Wall -Wno-address-of-packed-member -Wno-missing-braces
+ LDFLAGS+= -lpcap -lm
+ 
+ .ifndef(PREFIX)

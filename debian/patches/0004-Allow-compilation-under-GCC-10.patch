@@ -1,0 +1,73 @@
+From: Octavio Alvarez <alvarezp@alvarezp.com>
+Date: Sun, 26 Jul 2020 22:14:52 -0500
+Subject: Allow compilation under GCC-10
+
+This patch was cherry-picked from upstream:
+
+> SHA-1: 2bde90f3845234490549640dc6ed5712d84969ba
+> Declare variables as static where appropriate to avoid compile error:
+> https://bugs.gentoo.org/706312
+
+Upstream decided to go with static declarations.
+
+Origin: upstream, https://github.com/fgont/ipv6toolkit/commit/2bde90f3845234490549640dc6ed5712d84969ba
+Bug-Debian: http://bugs.debian.org/957370
+Bug-Gentoo: https://bugs.gentoo.org/show_bug.cgi?id=706312
+Bug: https://github.com/fgont/ipv6toolkit/pull/54
+Last-Update: 2020-04-04
+---
+ tools/libipv6.c | 10 +++++-----
+ tools/scan6.c   |  4 ++--
+ 2 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/tools/libipv6.c b/tools/libipv6.c
+index d70dc26..2765591 100644
+--- a/tools/libipv6.c
++++ b/tools/libipv6.c
+@@ -66,12 +66,10 @@
+ 
+ 
+ /* IPv6 Address Resolution */
+-sigjmp_buf			env;
+-unsigned int		canjump;
++static sigjmp_buf			env;
++static unsigned int			canjump;
++
+ 
+-/* pcap variables */
+-char				errbuf[PCAP_ERRBUF_SIZE];
+-struct bpf_program	pcap_filter;
+ 
+ #ifdef __linux__
+ /* Netlink requests */
+@@ -517,6 +515,7 @@ int ether_pton(const char *ascii, struct ether_addr *etheraddr, unsigned int s){
+ 
+ int find_ipv6_router_full(pcap_t *pfd, struct iface_data *idata){
+ 	struct pcap_pkthdr			*pkthdr;
++	struct bpf_program	pcap_filter;
+ 	const u_char				*pktdata;
+ 	struct ether_header			*pkt_ether;
+ 	struct ip6_hdr				*pkt_ipv6;
+@@ -4233,6 +4232,7 @@ int find_ipv6_router(pcap_t *pfd, struct ether_addr *hsrcaddr, struct in6_addr *
+ 					struct ether_addr *result_ether, struct in6_addr *result_ipv6){
+ 
+ 	struct pcap_pkthdr			*pkthdr;
++	struct bpf_program			pcap_filter;
+ 	const u_char				*pktdata;
+ 	struct ether_header			*pkt_ether;
+ 	struct ip6_hdr				*pkt_ipv6;
+diff --git a/tools/scan6.c b/tools/scan6.c
+index d36e219..df2fed1 100644
+--- a/tools/scan6.c
++++ b/tools/scan6.c
+@@ -251,8 +251,8 @@ uint16_t				service_ports_dec[]={21, 22, 23, 25, 49, 53, 80, 110, 123, 179, 220,
+ 
+ 
+ /* IPv6 Address Resolution */
+-sigjmp_buf				env;
+-unsigned int			canjump;
++static sigjmp_buf				env;
++static unsigned int				canjump;
+ 
+ int main(int argc, char **argv){
+ 	extern char				*optarg;
