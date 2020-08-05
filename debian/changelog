@@ -1,8 +1,15 @@
-ipv6toolkit (2.0+ds.1-1) UNRELEASED; urgency=medium
+ipv6toolkit (2.0+ds.1-1) unstable; urgency=medium
 
-  * Sarted working on version. This is a temporary changelog.
+  * Refreshed patches using gbp pq export. Added:
+    - Fixed GCC-10 compilation. Closes: #957370.
+    - Silenced compilation warnings that are already fixed upstream.
+    - Fixed stringop-truncation warning.
+  * Bumped compat level to 12.
+  * Bumped Standards-Version to 4.5.0.
+    - Changed Priority to optional.
+  * Disabled debian/watch.
 
- -- Octavio Alvarez <alvarezp@alvarezp.com>  Tue, 01 Aug 2020 00:00:00 -0000
+ -- Octavio Alvarez <alvarezp@alvarezp.com>  Tue, 04 Aug 2020 23:21:55 -0500
 
 ipv6toolkit (2.0-1) unstable; urgency=medium
 
