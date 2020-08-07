@@ -1,3 +1,2 @@
-version=3
-opts=uversionmangle=s/(\d)[_\.\-\+]?((RC|rc|pre|dev|beta|alpha)\d*)$/$1~$2/,pgpsigurlmangle=s/$/.sig/ \
-  http://www.si6networks.com/tools/ipv6toolkit/ipv6-?toolkit-v(.+)\.tar\.gz
+# Upstream removed the way to find new releases. This has already been
+# reported but for now it does not make sense to add a watch file.
