@@ -1486,7 +1486,7 @@ int main(int argc, char **argv){
 
 					if(pkt_ipv6->ip6_nxt == IPPROTO_TCP){
 						/* Check that we are able to look into the TCP header */
-						if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN + sizeof(struct tcp_hdr))){
+						if( (pkt_end -  pktdata) < (signed long int) (idata.linkhsize + MIN_IPV6_HLEN + sizeof(struct tcp_hdr))){
 							continue;
 						}
 
@@ -1538,7 +1538,7 @@ int main(int argc, char **argv){
 					}
 					else if(pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6){
 						/* Check that we are able to look into the NS header */
-						if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN + sizeof(struct nd_neighbor_solicit))){
+						if( (pkt_end -  pktdata) < (signed long int) (idata.linkhsize + MIN_IPV6_HLEN + sizeof(struct nd_neighbor_solicit))){
 							continue;
 						}
 
@@ -2961,7 +2961,7 @@ int is_valid_tcp_segment(struct iface_data *idata, const u_char *pktdata, struct
 	/*
 	   Discard the packet if it is not of the minimum size to contain a TCP header
 	 */
-	if( (pkt_end - (unsigned char *) pkt_tcp) < sizeof(struct tcp_hdr)){
+	if( (pkt_end - (unsigned char *) pkt_tcp) < (signed long int) sizeof(struct tcp_hdr)){
 		return FALSE;
 	}
 

@@ -843,7 +843,7 @@ int main(int argc, char **argv){
 
 					if(pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6){
 						if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK) && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
-							if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
+							if( (pkt_end - (unsigned char *) pkt_ns) < (signed long int) sizeof(struct nd_neighbor_solicit))
 								continue;
 							/* 
 								If the addresses that we're using are not actually configured on the local system
@@ -860,7 +860,7 @@ int main(int argc, char **argv){
 							}
 						}
 						else if( (pkt_icmp6->icmp6_type == ICMP6_ECHO_REPLY) || (pkt_icmp6->icmp6_type == ICMP6_TIME_EXCEEDED)){
-							if( (pkt_end - (unsigned char *) pkt_icmp6) < sizeof(struct icmp6_hdr))
+							if( (pkt_end - (unsigned char *) pkt_icmp6) < (signed long int) sizeof(struct icmp6_hdr))
 								continue;
 
 							switch(pkt_icmp6->icmp6_type){
@@ -1060,14 +1060,14 @@ int main(int argc, char **argv){
 					pkt_icmp6 = (struct icmp6_hdr *) ((char *) pkt_ipv6 + sizeof(struct ip6_hdr));
 					pkt_end = (unsigned char *) pktdata + pkthdr->caplen;
 
-					if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN))
+					if( (pkt_end -  pktdata) < (signed long int) (idata.linkhsize + MIN_IPV6_HLEN))
 						continue;
 
 					if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK) && \
 									pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6 && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
 						pkt_ns= (struct nd_neighbor_solicit *) pkt_icmp6;
 
-						if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
+						if( (pkt_end - (unsigned char *) pkt_ns) < (signed long int) sizeof(struct nd_neighbor_solicit))
 							continue;
 						/* 
 							If the addresses that we're using are not actually configured on the local system
@@ -1098,7 +1098,7 @@ int main(int argc, char **argv){
 					}
 					else if(pkt_ipv6->ip6_nxt == IPPROTO_FRAGMENT){
 						if( (pkt_end - (unsigned char *) pkt_ipv6) < \
-							(sizeof(struct ip6_hdr) + sizeof(struct ip6_frag) + sizeof(struct icmp6_hdr) + sizeof(uint32_t)))
+							(signed long int) (sizeof(struct ip6_hdr) + sizeof(struct ip6_frag) + sizeof(struct icmp6_hdr) + sizeof(uint32_t)))
 							continue;
 
 						pkt_fh= (struct ip6_frag *) ( (unsigned char *)pkt_ipv6 + sizeof(struct ip6_hdr));
@@ -1354,7 +1354,7 @@ int main(int argc, char **argv){
 
 					if(pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6){
 						if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK) && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
-							if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
+							if( (pkt_end - (unsigned char *) pkt_ns) < (signed long int) sizeof(struct nd_neighbor_solicit))
 								continue;
 							/* 
 								If the addresses that we're using are not actually configured on the local system
@@ -1371,7 +1371,7 @@ int main(int argc, char **argv){
 							}
 						}
 						else if( (pkt_icmp6->icmp6_type == ICMP6_ECHO_REPLY) || (pkt_icmp6->icmp6_type == ICMP6_TIME_EXCEEDED)){
-							if( (pkt_end - (unsigned char *) pkt_icmp6) < sizeof(struct icmp6_hdr)){
+							if( (pkt_end - (unsigned char *) pkt_icmp6) < (signed long int) sizeof(struct icmp6_hdr)){
 								continue;
 							}
 							/*
@@ -2419,7 +2419,7 @@ int valid_icmp6_response(struct iface_data *idata, struct pcap_pkthdr *pkthdr, c
 			   Discard the packet if it is not of the minimum size to contain an ICMPv6 
 			   header and the payload we included in the ICMPv6 Echo Request
 			 */
-			if( (pkt_end - (unsigned char *) pkt_icmp6) < (sizeof(struct icmp6_hdr) + \
+			if( (pkt_end - (unsigned char *) pkt_icmp6) < (signed long int) (sizeof(struct icmp6_hdr) + \
 									fsize) && (pkt_end - (unsigned char *) pkt_ipv6) < MIN_IPV6_MTU){
 				return 0;
 			}

@@ -617,7 +617,7 @@ int main(int argc, char **argv){
 
 					if(pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6){
 						if(pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
-							if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
+							if( (pkt_end - (unsigned char *) pkt_ns) < (signed long int) sizeof(struct nd_neighbor_solicit))
 								continue;
 							/* 
 								If the addresses that we're using are not actually configured on the local system
@@ -633,7 +633,7 @@ int main(int argc, char **argv){
 							}
 						}
 						else if( (pkt_icmp6->icmp6_type == ICMP6_ECHO_REPLY) || (pkt_icmp6->icmp6_type == ICMP6_PARAM_PROB)){
-							if( (pkt_end - (unsigned char *) pkt_icmp6) < sizeof(struct icmp6_hdr))
+							if( (pkt_end - (unsigned char *) pkt_icmp6) < (signed long int) sizeof(struct icmp6_hdr))
 								continue;
 							/*
 							   Do a preliminar validation check on the ICMPv6 packet (packet size, Source Address,
@@ -1157,7 +1157,7 @@ int valid_icmp6_response(struct iface_data *idata, struct pcap_pkthdr *pkthdr, c
 			   Discard the packet if it is not of the minimum size to contain an ICMPv6 
 			   header and the payload we included in the ICMPv6 Echo Request
 			 */
-			if( (pkt_end - (unsigned char *) pkt_icmp6) < (sizeof(struct icmp6_hdr) + \
+			if( (pkt_end - (unsigned char *) pkt_icmp6) < (signed long int) (sizeof(struct icmp6_hdr) + \
 									icmp6psize) ){
 				return 0;
 			}
@@ -1179,7 +1179,7 @@ int valid_icmp6_response(struct iface_data *idata, struct pcap_pkthdr *pkthdr, c
 			   Discard the packet if it is not of the minimum size to contain an ICMPv6 
 			   header and the payload we included in the ICMPv6 Echo Request
 			 */
-			if( (pkt_end - (unsigned char *) pkt_icmp6) < (sizeof(struct icmp6_hdr) + \
+			if( (pkt_end - (unsigned char *) pkt_icmp6) < (signed long int) (sizeof(struct icmp6_hdr) + \
 						+ sizeof(struct ip6_hdr) + sizeof(struct icmp6_hdr) + \
 						  icmp6psize) ){
 				return 0;

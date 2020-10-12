@@ -1251,7 +1251,7 @@ int main(int argc, char **argv){
 							continue;
 
 						/* Check that we are able to look into the UDP header */
-						if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN + sizeof(struct udp_hdr))){
+						if( (pkt_end -  pktdata) < (signed long int) (idata.linkhsize + MIN_IPV6_HLEN + sizeof(struct udp_hdr))){
 							continue;
 						}
 
@@ -1304,7 +1304,7 @@ int main(int argc, char **argv){
 					else if(pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6){
 
 						/* Check that we are able to look into the NS header */
-						if( (pkt_end -  pktdata) < (idata.linkhsize + MIN_IPV6_HLEN + sizeof(struct nd_neighbor_solicit))){
+						if( (pkt_end -  pktdata) < (signed long int) (idata.linkhsize + MIN_IPV6_HLEN + sizeof(struct nd_neighbor_solicit))){
 							continue;
 						}
 
@@ -1969,7 +1969,7 @@ int is_valid_udp_datagram(struct iface_data *idata, const u_char *pktdata, struc
 	/*
 	   Discard the packet if it is not of the minimum size to contain a UDP header
 	 */
-	if( (pkt_end - (unsigned char *) pkt_udp) < sizeof(struct udp_hdr)){
+	if( (pkt_end - (unsigned char *) pkt_udp) < (signed long int) sizeof(struct udp_hdr)){
 		return FALSE;
 	}
 

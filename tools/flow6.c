@@ -506,7 +506,7 @@ int main(int argc, char **argv){
 					if(pkt_ipv6->ip6_nxt == IPPROTO_ICMPV6 && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
 						pkt_ns= (struct nd_neighbor_solicit *) pkt_icmp6;
 
-						if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
+						if( (pkt_end - (unsigned char *) pkt_ns) < (signed long int) sizeof(struct nd_neighbor_solicit))
 							continue;
 						/* 
 							If the addresses that we're using are not actually configured on the local system
@@ -539,7 +539,7 @@ int main(int argc, char **argv){
 						/* Perform TCP-specific validation checks */
 						if(protocol == IPPROTO_TCP){
 							if( (pkt_end - (unsigned char *) pkt_ipv6) < \
-									(sizeof(struct ip6_hdr) + sizeof(struct tcp_hdr)))
+									(signed long int) (sizeof(struct ip6_hdr) + sizeof(struct tcp_hdr)))
 								continue;
 
 							pkt_tcp= (struct tcp_hdr *) ((unsigned char *)pkt_ipv6 + sizeof(struct ip6_hdr));
@@ -570,7 +570,7 @@ int main(int argc, char **argv){
 						/* Perform UDP-specific validation checks */
 						else if(protocol == IPPROTO_UDP){
 							if( (pkt_end - (unsigned char *) pkt_ipv6) < \
-									(sizeof(struct ip6_hdr) + sizeof(struct udp_hdr)))
+									(signed long int) (sizeof(struct ip6_hdr) + sizeof(struct udp_hdr)))
 								continue;
 
 							pkt_udp= (struct udp_hdr *) ((unsigned char *)pkt_ipv6 + sizeof(struct ip6_hdr));
