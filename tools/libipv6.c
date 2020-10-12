@@ -805,7 +805,7 @@ int find_ipv6_router_full(pcap_t *pfd, struct iface_data *idata){
 			   Discard the packet if it is not of the minimum size to contain a Router Advertisement
 			   message with a source link-layer address option
 			 */
-			if( (pkt_end - (unsigned char *) pkt_ra) < (sizeof(struct nd_router_advert) + \
+			if( (pkt_end - (unsigned char *) pkt_ra) < (signed int) (sizeof(struct nd_router_advert) + \
 										sizeof(struct nd_opt_slla)))
 				continue;
 
@@ -1278,7 +1278,7 @@ int ipv6_to_ether(pcap_t *pfd, struct iface_data *idata, struct in6_addr *target
 			   Discard the packet if it is not of the minimum size to contain a Neighbor Advertisement
 			   message with a source link-layer address option
 			 */
-			if( (pkt_end - (unsigned char *) pkt_na) < (sizeof(struct nd_neighbor_advert) + \
+			if( (pkt_end - (unsigned char *) pkt_na) < (signed int) (sizeof(struct nd_neighbor_advert) + \
 										sizeof(struct nd_opt_tlla))){
 #ifdef DEBUG
 	puts("DEBUG: ipv6_to_ether(): NA too small");
@@ -4492,7 +4492,7 @@ int find_ipv6_router(pcap_t *pfd, struct ether_addr *hsrcaddr, struct in6_addr *
 			   Discard the packet if it is not of the minimum size to contain a Neighbor Advertisement
 			   message with a source link-layer address option
 			 */
-			if( (pkt_end - (unsigned char *) pkt_ra) < (sizeof(struct nd_router_advert) + \
+			if( (pkt_end - (unsigned char *) pkt_ra) < (signed int) (sizeof(struct nd_router_advert) + \
 										sizeof(struct nd_opt_slla)))
 				continue;
 

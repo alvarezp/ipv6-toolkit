@@ -941,7 +941,7 @@ int main(int argc, char **argv){
 				 */
 				if(ulhtype == IPPROTO_ICMPV6){
 					if(idata.type == DLT_EN10MB && !(idata.flags & IFACE_LOOPBACK) && pkt_icmp6->icmp6_type == ND_NEIGHBOR_SOLICIT){
-						if( (pkt_end - (unsigned char *) pkt_ns) < sizeof(struct nd_neighbor_solicit))
+						if( (pkt_end - (unsigned char *) pkt_ns) < (signed long int) sizeof(struct nd_neighbor_solicit))
 							continue;
 						/* 
 							If the addresses that we're using are not actually configured on the local system
@@ -960,7 +960,7 @@ int main(int argc, char **argv){
 					}
 					else if( probetype == PROBE_ICMP6_ECHO && (pkt_icmp6->icmp6_type == ICMP6_ECHO_REPLY)){
 						/* Process the ICMPv6 Echo Reply */
-						if( (pkt_end - (unsigned char *) pkt_icmp6) < sizeof(struct icmp6_hdr))
+						if( (pkt_end - (unsigned char *) pkt_icmp6) < (signed long int) sizeof(struct icmp6_hdr))
 							continue;
 
 						if(ntohs(pkt_icmp6->icmp6_data16[0]) != getpid() )
@@ -1059,7 +1059,7 @@ int main(int argc, char **argv){
 
 						if(probetype == PROBE_ICMP6_ECHO && ulhtype == IPPROTO_ICMPV6 && 
 						   pkt_icmp6->icmp6_type == ICMP6_ECHO_REQUEST){
-							if( (pkt_end - (unsigned char *) pkt_icmp6) < sizeof(struct icmp6_hdr))
+							if( (pkt_end - (unsigned char *) pkt_icmp6) < (signed long int) sizeof(struct icmp6_hdr))
 								continue;
 
 							if(ntohs(pkt_icmp6->icmp6_data16[0]) != getpid() )
@@ -1071,7 +1071,7 @@ int main(int argc, char **argv){
 						else if(probetype == PROBE_TCP && ulhtype == IPPROTO_TCP){
 							/* Must still verify the TCP checksum */
 
-							if( (pkt_end - (unsigned char *) pkt_tcp) < sizeof(struct tcp_hdr))
+							if( (pkt_end - (unsigned char *) pkt_tcp) < (signed long int) sizeof(struct tcp_hdr))
 								continue;
 
 							if( ntohl(pkt_tcp->th_seq) != tcpseq)
@@ -1082,7 +1082,7 @@ int main(int argc, char **argv){
 						}
 						else if(probetype == PROBE_UDP && ulhtype == IPPROTO_UDP){
 							/* Must still verify the UDP checksum */
-							if( (pkt_end - (unsigned char *) pkt_udp) < sizeof(struct udp_hdr))
+							if( (pkt_end - (unsigned char *) pkt_udp) < (signed long int) sizeof(struct udp_hdr))
 								continue;
 
 							if(ntohs(pkt_udp->uh_ulen) < sizeof(struct udp_hdr))
@@ -1096,7 +1096,7 @@ puts("Lei un ICMPv6 Time exceeded");
 						}
 
 						else if(probetype == PROBE_ESP && ulhtype == IPPROTO_ESP){
-							if( (pkt_end - (unsigned char *) pkt_esp) < sizeof(struct esp_hdr))
+							if( (pkt_end - (unsigned char *) pkt_esp) < (signed long int) sizeof(struct esp_hdr))
 								continue;
 
 							if(pkt_esp->esp_spi != spi)
@@ -1109,7 +1109,7 @@ puts("Lei un ICMPv6 Time exceeded");
 #ifdef DEBUG
 puts("Got time exceeeded for AH");
 #endif 
-							if( (pkt_end - (unsigned char *) pkt_ah) < sizeof(struct ah_hdr))
+							if( (pkt_end - (unsigned char *) pkt_ah) < (signed long int) sizeof(struct ah_hdr))
 								continue;
 
 							if(pkt_ah->ah_spi != spi)
@@ -1126,7 +1126,7 @@ puts("Got time exceeeded for AH");
 				else if(ulhtype == IPPROTO_TCP && probetype == PROBE_TCP){
 					/* Must still verify the TCP checksum -- We do not do it yet */
 
-					if( (pkt_end - (unsigned char *) pkt_tcp) < sizeof(struct tcp_hdr))
+					if( (pkt_end - (unsigned char *) pkt_tcp) < (signed long int) sizeof(struct tcp_hdr))
 						continue;
 
 					if(!is_eq_in6_addr(&(pkt_ipv6->ip6_src), &(idata.dstaddr))){
@@ -1151,7 +1151,7 @@ puts("Got time exceeeded for AH");
 				}
 				else if(probetype == PROBE_UDP && ulhtype == IPPROTO_UDP){
 					/* Must still verify the UDP checksum */
-					if( (pkt_end - (unsigned char *) pkt_udp) < sizeof(struct udp_hdr))
+					if( (pkt_end - (unsigned char *) pkt_udp) < (signed long int) sizeof(struct udp_hdr))
 						continue;
 
 					if(ntohs(pkt_udp->uh_sport) != dstport){

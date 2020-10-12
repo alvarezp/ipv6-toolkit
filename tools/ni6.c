@@ -1445,7 +1445,7 @@ int	print_ni_addr(struct iface_data *idata, const u_char *pktdata, struct pcap_p
 
 	pkt_nidata= (struct ni_reply_ip *) ((char *)pkt_ni + sizeof(struct icmp6_nodeinfo));
 
-	while( (pkt_end - (unsigned char *) pkt_nidata) >= sizeof(struct ni_reply_ip)){
+	while( (pkt_end - (unsigned char *) pkt_nidata) >= (signed long int) sizeof(struct ni_reply_ip)){
 		if(inet_ntop(AF_INET, &(pkt_nidata->ip), pv6addr, sizeof(pv6addr)) == NULL){
 			if(idata->verbose_f)
 				puts("inet_ntop(): Error converting IPv4 Address to presentation format");
@@ -1587,7 +1587,7 @@ int	print_ni_addr6(struct iface_data *idata, const u_char *pktdata, struct pcap_
 
 	pkt_nidata= (struct ni_reply_ip6 *) ((char *)pkt_ni + sizeof(struct icmp6_nodeinfo));
 
-	while( (pkt_end - (unsigned char *) pkt_nidata) >= sizeof(struct ni_reply_ip6)){
+	while( (pkt_end - (unsigned char *) pkt_nidata) >= (signed long int) sizeof(struct ni_reply_ip6)){
 		if(inet_ntop(AF_INET6, &(pkt_nidata->ip6), pv6addr, sizeof(pv6addr)) == NULL){
 			if(idata->verbose_f)
 				puts("inet_ntop(): Error converting IPv6 Source Address to presentation format");
